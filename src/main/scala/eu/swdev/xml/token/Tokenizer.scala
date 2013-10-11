@@ -1,13 +1,13 @@
 package main.scala.eu.swdev.xml.token
 
-import main.scala.eu.swdev.parser.push.PushParsers
+import main.scala.eu.swdev.parser.push.{CharPushParsers, PushParsers}
 import scala.util.matching.Regex
 
 /**
  */
 class Tokenizer(val tokenHandler: TokenHandler) {
 
-  val XmlPushParsers = new PushParsers[Char] {
+  val XmlPushParsers = new CharPushParsers {
 
     var line = 1
     var column = 1
@@ -33,7 +33,7 @@ class Tokenizer(val tokenHandler: TokenHandler) {
     // 3
     val _S = new PushParser[Nothing] {
       def push(i: Char): PushResult[Nothing] = if (isWhitespace(i)) {
-        Return(true, Seq(), i :: Nil)
+        Return(true, Seq(), Nil)
       } else {
         FailedPush(true)
       }
@@ -56,7 +56,7 @@ class Tokenizer(val tokenHandler: TokenHandler) {
     val _misc: PushParser[Token] = EmptyPushParser
 
     // 32
-    val _SDDecl = _S ~ "standalone" ~ _Eq ~ (("'" ~ "yes|no".r ~ "'") | (("\"" ~ "yes|no".r ~ "\"")))
+    val _SDDecl = _S ~ "standalone" ~ _Eq ~ (("'" ~ "yes|no".p ~ "'") | (("\"" ~ "yes|no".p ~ "\"")))
 
     // 39
     val _element: PushParser[Token] = EmptyPushParser
@@ -65,51 +65,16 @@ class Tokenizer(val tokenHandler: TokenHandler) {
     val _EncodingDecl = _S ~ "encoding" ~ _Eq ~ (("'" ~ _EncName ~ "'") | (("\"" ~ _EncName ~ "\"")))
 
     // 81
-    val _EncName = "[A-Za-z]([A-Za-z0-9,_]|-)*".r
+    val _EncName = "[A-Za-z]([A-Za-z0-9,_]|-)*".p
 
     //
     //
     //
     
-    implicit def pushParser(string: String): PushParser[Nothing] = new PushParser[Nothing] {
-      var idx = 0
-      def push(i: Char): PushResult[Nothing] = if (idx == string.length) {
-        Return(true, Seq(), i :: Nil)
-      } else if (string.charAt(idx) == i) {
-        idx = idx + 1
-        Continue(true, Seq(), this)
-      } else {
-        FailedPush(true)
-      }
+    implicit def pushParser(string: String): PushParser[Nothing] = new IgnorePushParser(string, false)
 
-      def flush(): FlushResult[Nothing] = if (idx == string.length) {
-        Flushed(true, Seq())
-      } else {
-        FailedFlush(true)
-      }
-    }
-
-    implicit def pushParser(regex: Regex): PushParser[String] = new PushParser[String] {
-      val sb = new StringBuilder
-      def push(i: Char): PushResult[String] = {
-        sb.append(i)
-        if (regex.findFirstIn(sb).isDefined) {
-          Continue(true, Seq(), this)
-        } else {
-          sb.setLength(sb.length - 1)
-          if (regex.findFirstIn(sb).isDefined) {
-            Return(true, Seq(sb.toString()), i :: Nil)
-          } else {
-            FailedPush(true)
-          }
-        }
-      }
-
-      def flush(): FlushResult[String] = if (regex.findFirstIn(sb).isDefined) {
-        Flushed(true, Seq(sb.toString()))
-      } else {
-        FailedFlush(true)
-      }
+    implicit class StrOps(string: String) {
+      def p: PushParser[String] = new PatternPushParser(string, true)
     }
 
   }

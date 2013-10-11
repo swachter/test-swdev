@@ -10,6 +10,11 @@ class PushParsersTest extends FunSuite {
 
     implicit def pushParser(string: String): PushParser[Char] = new EchoPushParser(string, false)
 
+    implicit class StrOps(string: String) {
+      def p: PushParser[String] = new PatternPushParser(string, true)
+      def q: PushParser[String] = new PatternPushParser(string, false)
+    }
+
     val _unit = unit('a')
 
     val _aOrB = "a" | "b"
@@ -28,12 +33,17 @@ class PushParsersTest extends FunSuite {
 
     val _aBindB = "a" >>= ((a: Char) => "b" >>= ((b: Char) => unit((a,b))))
 
+    val _greedyAs = "a*".p
+
+    val _reluctantAs = "a*".q
+
+    val _yesOrNo = "yes|no".p
   }
 
   import parsers._
 
   test("unit") {
-    assert(_unit.flush() === Flushed(true, List('a')))
+    assert(_unit.flush() === Flushed(true, List('a'), Nil))
   }
 
   test("aOrB") {
@@ -94,6 +104,28 @@ class PushParsersTest extends FunSuite {
     assert(_aBindB.run("b") === RunFailure(Seq()))
   }
 
+  test("greedyAs") {
+    assert(_greedyAs.run("") === RunSuccess(Seq(""), Seq()))
+    assert(_greedyAs.run("a") === RunSuccess(Seq("a"), Seq()))
+    assert(_greedyAs.run("aa") === RunSuccess(Seq("aa"), Seq()))
+    assert(_greedyAs.run("aab") === RunSuccess(Seq("aa"), Seq('b')))
+    assert(_greedyAs.run("b") === RunSuccess(Seq(""), Seq('b')))
+  }
+
+  test("reluctantAs") {
+    assert(_reluctantAs.run("") === RunSuccess(Seq(""), Seq()))
+    assert(_reluctantAs.run("a") === RunSuccess(Seq("a"), Seq()))
+    assert(_reluctantAs.run("aa") === RunSuccess(Seq("a"), Seq('a')))
+    assert(_reluctantAs.run("aab") === RunSuccess(Seq("a"), Seq('a', 'b')))
+    assert(_reluctantAs.run("b") === RunSuccess(Seq(""), Seq('b')))
+  }
+
+  test("yesOrNo") {
+    assert(_yesOrNo.run("yes") === RunSuccess(Seq("yes"), Seq()))
+    assert(_yesOrNo.run("no") === RunSuccess(Seq("no"), Seq()))
+    assert(_yesOrNo.run("yesx") === RunSuccess(Seq("yes"), Seq('x')))
+    assert(_yesOrNo.run("y") === RunFailure(Seq()))
+  }
 
 }
 

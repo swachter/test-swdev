@@ -1,6 +1,7 @@
 package main.scala.eu.swdev.parser.push
 
 import scala.annotation.tailrec
+import java.util.regex.Pattern
 
 /**
  */
@@ -41,7 +42,7 @@ trait PushParsers[I] {
       }
 
       def flush(): FlushResult[T] = self.flush() match {
-        case r@Flushed(_, out) => r.copy(out = out.map(f))
+        case r@Flushed(_, out, _) => r.copy(out = out.map(f))
         case r@FailedFlush(_) => r
       }
     }
@@ -67,7 +68,7 @@ trait PushParsers[I] {
         case r@FailedPush(committed) => if (committed) r.copy(committed = false) else r
       }
       def flush(): FlushResult[O] = self.flush() match {
-        case r@Flushed(committed, _) => if (committed) r.copy(committed = false) else r
+        case r@Flushed(committed, _, _) => if (committed) r.copy(committed = false) else r
         case r@FailedFlush(committed) => if (committed) r.copy(committed = false) else r
       }
     }
@@ -79,7 +80,7 @@ trait PushParsers[I] {
         case r@FailedPush(committed) => if (!committed) r.copy(committed = true) else r
       }
       def flush(): FlushResult[O] = self.flush() match {
-        case r@Flushed(committed, _) => if (!committed) r.copy(committed = true) else r
+        case r@Flushed(committed, _, _) => if (!committed) r.copy(committed = true) else r
         case r@FailedFlush(committed) => if (!committed) r.copy(committed = true) else r
       }
     }
@@ -94,7 +95,7 @@ trait PushParsers[I] {
       }
 
       def flush(): FlushResult[Nothing] = self.flush() match {
-        case r@Flushed(_, _) => r.copy(out = Seq())
+        case r@Flushed(_, _, _) => r.copy(out = Seq())
         case r@FailedFlush(_) => r
       }
     }
@@ -106,7 +107,7 @@ trait PushParsers[I] {
       def doRun(in: Seq[I], pp: PushParser[O], outAccu: Seq[O]): RunResult[O] = {
         if (in.isEmpty) {
           pp.flush() match {
-            case Flushed(_, out) => RunSuccess(out ++ outAccu, Seq())
+            case Flushed(_, out, unconsumed) => RunSuccess(out ++ outAccu, unconsumed)
             case FailedFlush(_) => RunFailure(outAccu)
           }
         } else {
@@ -145,7 +146,8 @@ trait PushParsers[I] {
 
   case class Flushed[O](
     committed: Boolean,
-    out: Seq[O]) extends FlushResult[O]
+    out: Seq[O],
+    unconsumed: List[I]) extends FlushResult[O]
 
   case class FailedFlush(
     committed: Boolean) extends FlushResult[Nothing]
@@ -171,12 +173,12 @@ trait PushParsers[I] {
 
   object EmptyPushParser extends PushParser[Nothing] {
     def push(i: I): PushResult[Nothing] = Return(true, Seq(), i :: Nil)
-    def flush(): FlushResult[Nothing] = Flushed(true, Seq())
+    def flush(): FlushResult[Nothing] = Flushed(true, Seq(), Nil)
   }
 
   case class UnitPushParser[O](o: O) extends PushParser[O] {
     def push(i: I): PushResult[O] = Return(true, Seq(o), i :: Nil)
-    def flush(): FlushResult[O] = Flushed(true, Seq(o))
+    def flush(): FlushResult[O] = Flushed(true, Seq(o), Nil)
   }
 
   class AndPushParser[O](p1: PushParser[O], p2: => PushParser[O]) extends PushParser[O] {
@@ -194,9 +196,13 @@ trait PushParsers[I] {
 
     def flush(): FlushResult[O] = {
       p1.flush() match {
-        case Flushed(committed1, out1) => p2.flush() match {
-          case Flushed(committed2, out2) => Flushed(committed1 || committed2, out1 ++ out2)
-          case r@FailedFlush(_) => r
+        case Flushed(committed1, out1, unconsumed1) => p2.pushAll(unconsumed1) match {
+          case Continue(committed2, out2, next2) => next2.flush() match {
+            case Flushed(committed3, out3, unconsumed3) => Flushed(committed1 || committed2 || committed3, out3 ++ out2 ++ out1, unconsumed3)
+            case r@FailedFlush(_) => r
+          }
+          case Return(committed2, out2, unconsumed2) => Flushed(committed1 || committed2, out2 ++ out1, unconsumed2)
+          case FailedPush(committed2) => FailedFlush(committed1 || committed2)
         }
         case r@FailedFlush(_) => r
       }
@@ -212,7 +218,7 @@ trait PushParsers[I] {
     }
 
     def flush(): FlushResult[O] = p1.flush() match {
-      case r@Flushed(_, _) => r
+      case r@Flushed(_, _, _) => r
       case r@FailedFlush(committed) => if (committed) r else p2.flush()
     }
 
@@ -229,7 +235,7 @@ trait PushParsers[I] {
 
       def flush(): FlushResult[O] = {
         rec.head._2.next.flush() match {
-          case Flushed(committed, out) => Flushed(committed, out ++ recordedOut)
+          case Flushed(committed, out, unconsumed) => Flushed(committed, out ++ recordedOut, unconsumed)
           case r@FailedFlush(_) => r
         }
       }
@@ -246,7 +252,7 @@ trait PushParsers[I] {
       case r@FailedPush(com) => r.copy(committed = committed || com)
     }
     def flush(): FlushResult[Seq[O]] = p.flush() match {
-      case r@Flushed(com, out) => Flushed(committed || com, Seq(out ++ collected))
+      case r@Flushed(com, out, unconsumed) => Flushed(committed || com, Seq(out ++ collected), unconsumed)
       case r@FailedFlush(com) => r.copy(committed = committed || com)
     }
   }
@@ -273,17 +279,23 @@ trait PushParsers[I] {
     }
 
     def flush(): FlushResult[T] = p.flush() match {
-      case r@Flushed(committed, out) => if (out.isEmpty) {
-        Flushed(committed, Seq())
+      case r@Flushed(committed1, out1, unconsumed1) => if (out1.isEmpty) {
+        r.copy(out = Seq())
       } else {
-        if (!out.tail.isEmpty) {
+        if (!out1.tail.isEmpty) {
           throw new RuntimeException("a parser that outputs more than one token can not be flatMapped")
         } else {
-          val o = out.head
+          val o = out1.head
           val ppb = f(o)
-          val ppb2 = if (committed) ppb.commit else ppb
-          // TODO feed unconsumed of Flushed into ppb2.pushAll(unconsumed)
-          ppb2.flush()
+          val ppb2 = if (committed1) ppb.commit else ppb
+          ppb2.pushAll(unconsumed1) match {
+            case Continue(committed2, out2, next2) => next2.flush() match {
+              case Flushed(committed3, out3, unconsumed3) => Flushed(committed1 || committed2 || committed3, out3 ++ out2, unconsumed3)
+              case FailedFlush(committed3) => FailedFlush(committed1 || committed2 || committed3)
+            }
+            case Return(committed2, out2, unconsumed2) => Flushed(committed1 || committed2, out2, unconsumed2)
+            case r@FailedPush(committed2) => FailedFlush(committed1 || committed2)
+          }
         }
       }
       case r@FailedFlush(_) => r
@@ -313,7 +325,7 @@ trait PushParsers[I] {
     }
 
     def flush(): FlushResult[Nothing] = if (ignore.isEmpty) {
-      Flushed(committed, Seq())
+      Flushed(committed, Seq(), Nil)
     } else {
       FailedFlush(committed)
     }
@@ -333,7 +345,7 @@ trait PushParsers[I] {
     }
 
     def flush(): FlushResult[I] = if (ignore.isEmpty) {
-      Flushed(committed, Seq())
+      Flushed(committed, Seq(), Nil)
     } else {
       FailedFlush(committed)
     }
@@ -348,26 +360,64 @@ trait PushParsers[I] {
 trait CharPushParsers extends PushParsers[Char] {
   import scala.util.matching.Regex
 
-  implicit def pushParser(regex: Regex): PushParser[String] = new PushParser[String] {
-    val sb = new StringBuilder
+  class PatternPushParser(regex: String, greedy: Boolean) extends PushParser[String] {
+
+    val pattern = Pattern.compile(regex)
+
     def push(i: Char): PushResult[String] = {
-      sb.append(i)
-      if (regex.findFirstIn(sb).isDefined) {
-        Continue(true, Seq(), this)
-      } else {
-        sb.setLength(sb.length - 1)
-        if (regex.findFirstIn(sb).isDefined) {
-          Return(true, Seq(sb.toString()), i :: Nil)
+      if (pattern.matcher("").matches()) {
+        if (greedy) {
+          new Recorder(new StringBuilder, Some(0)).push(i)
         } else {
-          FailedPush(true)
+          new Recorder(new StringBuilder, Some(0)).push(i) // Return(true, Seq(""), Nil)
         }
+      } else {
+        new Recorder(new StringBuilder, None).push(i)
       }
     }
 
-    def flush(): FlushResult[String] = if (regex.findFirstIn(sb).isDefined) {
-      Flushed(true, Seq(sb.toString()))
-    } else {
-      FailedFlush(true)
+    def flush(): FlushResult[String] = {
+      if (pattern.matcher("").matches()) {
+        Flushed(true, Seq(""), Nil)
+      } else {
+        FailedFlush(false)
+      }
+
+    }
+
+    class Recorder(sb: StringBuilder, var foundMatch: Option[Int]) extends PushParser[String] {
+      
+      def retReturn(idx: Int): Return[String] = Return(true, Seq(sb.substring(0, idx)), sb.substring(idx).to[List])
+      def retFlushed(idx: Int): Flushed[String] = Flushed(true, Seq(sb.substring(0, idx)), sb.substring(idx).to[List])
+      
+      def push(i: Char): PushResult[String] = {
+        sb.append(i)
+        val matcher = pattern.matcher(sb)
+        if (matcher.matches()) {
+          if (greedy) {
+            // greedy: continue, maybe the regex matches even more characters
+            foundMatch = Some(sb.length)
+            Continue(true, Seq(), this)
+          } else {
+            Return(true, Seq(sb.toString()), Nil)
+          }
+        } else {
+          // it does not match
+          if (matcher.hitEnd()) {
+            // maybe after some more characters it matches
+            if (greedy || foundMatch.isEmpty) {
+              Continue(true, Seq(), this)
+            } else {
+              retReturn(foundMatch.get)
+            }
+          } else {
+            // it will never match
+            foundMatch.map(retReturn(_)).getOrElse(FailedPush(true))
+          }
+        }
+      }
+
+      def flush(): FlushResult[String] = foundMatch.map(retFlushed(_)).getOrElse(FailedFlush(true))
     }
   }
 
