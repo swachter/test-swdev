@@ -26,34 +26,37 @@ class Tokenizer(val tokenHandler: TokenHandler) {
 
     // 2
     val _Char = new PushParser[Char] {
-      def push(i: Char): PushResult = if (isChar(i)) Return(Seq(i), true, Nil) else FailedPush(true)
-      def flush(): FlushResult = FailedFlush(true)
+      def push(i: Char): PushResult[Char] = if (isChar(i)) Return(true, Seq(i), Nil) else FailedPush(true)
+      def flush(): FlushResult[Char] = FailedFlush(true)
     }
 
     // 3
     val _S = new PushParser[Nothing] {
-      def push(i: Char): PushResult = if (isWhitespace(i)) {
-        Return(Seq(), true, i :: Nil)
+      def push(i: Char): PushResult[Nothing] = if (isWhitespace(i)) {
+        Return(true, Seq(), i :: Nil)
       } else {
         FailedPush(true)
       }
-      def flush(): FlushResult = FailedFlush(true)
+      def flush(): FlushResult[Nothing] = FailedFlush(true)
     }.oneOrMore
 
     // 22
     val _prolog: PushParser[Token] = _XmlDecl.optional
     
     // 23
-    val _XmlDecl = "<?xml".ignore ~ _VersionInfo ~ _EncodingDecl.optional
+    val _XmlDecl = "<?xml" ~ (_VersionInfo >>= ((vi: String) => (_EncodingDecl.option >>= ((ed: Option[String]) => (_SDDecl.option >>= ((sd: Option[String]) => unit(XmlDecl(vi, ed, sd)))))))) ~ _S.optional ~ "?>"
 
     // 24
-    val _VersionInfo = _S ~ "version".ignore ~ _Eq
+    val _VersionInfo = _S ~ "version" ~ _Eq
 
     // 25
     val _Eq = _S.optional ~ "=".ignore ~ _S.optional
 
     // 27
     val _misc: PushParser[Token] = EmptyPushParser
+
+    // 32
+    val _SDDecl = _S ~ "standalone" ~ _Eq ~ (("'" ~ "yes|no".r ~ "'") | (("\"" ~ "yes|no".r ~ "\"")))
 
     // 39
     val _element: PushParser[Token] = EmptyPushParser
@@ -68,19 +71,19 @@ class Tokenizer(val tokenHandler: TokenHandler) {
     //
     //
     
-    implicit def pushParser(string: String): PushParser[String] = new PushParser[String] {
+    implicit def pushParser(string: String): PushParser[Nothing] = new PushParser[Nothing] {
       var idx = 0
-      def push(i: Char): PushResult[String] = if (idx == string.length) {
-        Return(Seq(string), true, i :: Nil)
+      def push(i: Char): PushResult[Nothing] = if (idx == string.length) {
+        Return(true, Seq(), i :: Nil)
       } else if (string.charAt(idx) == i) {
         idx = idx + 1
-        Continue(Seq(), true, this)
+        Continue(true, Seq(), this)
       } else {
         FailedPush(true)
       }
 
-      def flush(): FlushResult[String] = if (idx == string.length) {
-        Flushed(true, Seq(string))
+      def flush(): FlushResult[Nothing] = if (idx == string.length) {
+        Flushed(true, Seq())
       } else {
         FailedFlush(true)
       }
@@ -91,11 +94,11 @@ class Tokenizer(val tokenHandler: TokenHandler) {
       def push(i: Char): PushResult[String] = {
         sb.append(i)
         if (regex.findFirstIn(sb).isDefined) {
-          Continue(Seq(), true, this)
+          Continue(true, Seq(), this)
         } else {
           sb.setLength(sb.length - 1)
           if (regex.findFirstIn(sb).isDefined) {
-            Return(Seq(sb.toString()), true, i :: Nil)
+            Return(true, Seq(sb.toString()), i :: Nil)
           } else {
             FailedPush(true)
           }
@@ -103,7 +106,7 @@ class Tokenizer(val tokenHandler: TokenHandler) {
       }
 
       def flush(): FlushResult[String] = if (regex.findFirstIn(sb).isDefined) {
-        Flushed(true, sb.toString())
+        Flushed(true, Seq(sb.toString()))
       } else {
         FailedFlush(true)
       }
@@ -112,6 +115,8 @@ class Tokenizer(val tokenHandler: TokenHandler) {
   }
 
   sealed trait Token
+
+  case class XmlDecl(version: String, encoding: Option[String], standalone: Option[String]) extends Token
 
   private def isWhitespace(char: Char) = char == ' ' || char == '\n' || char == '\t' || char == '\r'
   
