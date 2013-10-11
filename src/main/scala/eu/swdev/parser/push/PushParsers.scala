@@ -23,8 +23,8 @@ trait PushParsers[I] {
       } else {
         pushAll(is.tail) match {
           case Continue(committed1, out1, next1) => next1.push(is.head) match {
-            case Continue(committed2, out2, next2) => Continue(committed1 || committed2, out1 ++ out2, next2)
-            case Return(committed2, out2, unconsumed) => Return(committed1 || committed2, out1 ++ out2, unconsumed)
+            case Continue(committed2, out2, next2) => Continue(committed1 || committed2, out2 ++ out1, next2)
+            case Return(committed2, out2, unconsumed) => Return(committed1 || committed2, out2 ++ out1, unconsumed)
             case r@FailedPush(_) => r
           }
           case Return(committed1, out1, unconsumed1) => Return(committed1, out1, is.head :: unconsumed1)
@@ -62,7 +62,7 @@ trait PushParsers[I] {
 
     def attempt: PushParser[O] = new PushParser[O] {
       def push(i: I): PushResult[O] = self.push(i) match {
-        case r@Continue(committed, _, _) => if (committed) r.copy(committed = false) else r
+        case r@Continue(committed, _, next) => if (committed) r.copy(committed = false, next = next.attempt) else r
         case r@Return(committed, _, _) => if (committed) r.copy(committed = false) else r
         case r@FailedPush(committed) => if (committed) r.copy(committed = false) else r
       }
@@ -74,7 +74,7 @@ trait PushParsers[I] {
 
     def commit: PushParser[O] = new PushParser[O] {
       def push(i: I): PushResult[O] = self.push(i) match {
-        case r@Continue(committed, _, _) => if (!committed) r.copy(committed = true) else r
+        case r@Continue(committed, _, next) => if (!committed) r.copy(committed = true, next = next.commit) else r
         case r@Return(committed, _, _) => if (!committed) r.copy(committed = true) else r
         case r@FailedPush(committed) => if (!committed) r.copy(committed = true) else r
       }
@@ -234,7 +234,7 @@ trait PushParsers[I] {
         }
       }
 
-      private def recordedOut: Seq[O] = rec.foldRight(Seq[O]())((c, s) => c._2.out ++ s)
+      private def recordedOut: Seq[O] = rec.flatMap(_._2.out) //rec.foldRight(Seq[O]())((c, s) => c._2.out ++ s)
 
     }
   }
