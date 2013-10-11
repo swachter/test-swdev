@@ -163,9 +163,7 @@ trait PushParsers[I] {
 
   def unit[O](o: O) = UnitPushParser(o)
 
-  def ignore(input: Seq[I]): PushParser[Nothing] = new IgnorePushParser(input, false) {
-
-  }
+  def ignore(input: Seq[I]): PushParser[Nothing] = new IgnorePushParser(input, false)
 
   //
   //
@@ -321,6 +319,26 @@ trait PushParsers[I] {
     }
   }
 
+  class EchoPushParser(ignore: Seq[I], committed: Boolean) extends PushParser[I] {
+    def push(i: I): PushResult[I] = if (ignore.isEmpty) {
+      Return(committed, Seq(), i :: Nil)
+    } else if (i == ignore.head) {
+      if (ignore.tail.isEmpty) {
+        Return(true, Seq(i), Nil)
+      } else {
+        Continue(true, Seq(i), new EchoPushParser(ignore.tail, true))
+      }
+    } else {
+      FailedPush(committed)
+    }
+
+    def flush(): FlushResult[I] = if (ignore.isEmpty) {
+      Flushed(committed, Seq())
+    } else {
+      FailedFlush(committed)
+    }
+  }
+
   //
   //
   //
@@ -329,14 +347,6 @@ trait PushParsers[I] {
 
 trait CharPushParsers extends PushParsers[Char] {
   import scala.util.matching.Regex
-
-  /**
-   * Creates a push parser that accepts the specified string and has no output.
-   *
-   * @param string
-   * @return
-   */
-  implicit def pushParser(string: String): PushParser[Nothing] = new IgnorePushParser(string, false)
 
   implicit def pushParser(regex: Regex): PushParser[String] = new PushParser[String] {
     val sb = new StringBuilder
