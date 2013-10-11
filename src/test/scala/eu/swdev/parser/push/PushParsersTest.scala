@@ -10,7 +10,11 @@ class PushParsersTest extends FunSuite {
 
     val _unit = unit('a')
 
-    val _aOrb = "a" | "b"
+    val _aOrB = "a" | "b"
+    
+    val _aAndB = "a" ~ "b"
+
+    val _manyA = "a".many
 
     def drive[O](input: Seq[Char], pp: PushParser[O]): RunResult[O] = {
       @tailrec
@@ -45,10 +49,28 @@ class PushParsersTest extends FunSuite {
   }
 
   test("aOrB") {
-    assert(_aOrb.run("a") === RunSuccess(Seq(), Seq()))
-    assert(_aOrb.run("b") === RunSuccess(Seq(), Seq()))
-    assert(_aOrb.run("bbc") === RunSuccess(Seq(), Seq('b', 'c')))
+    assert(_aOrB.run("a") === RunSuccess(Seq(), Seq()))
+    assert(_aOrB.run("b") === RunSuccess(Seq(), Seq()))
+    assert(_aOrB.run("bbc") === RunSuccess(Seq(), Seq('b', 'c')))
+    assert(_aOrB.run("x") === RunFailure(Seq()))
   }
+
+  test("aAndB") {
+    assert(_aAndB.run("ab") === RunSuccess(Seq(), Seq()))
+    assert(_aAndB.run("abc") === RunSuccess(Seq(), Seq('c')))
+    assert(_aAndB.run("ac") === RunFailure(Seq()))
+    assert(_aAndB.run("b") === RunFailure(Seq()))
+  }
+
+  test("manyA") {
+    assert(_manyA.run("") === RunSuccess(Seq(), Seq()))
+    assert(_manyA.run("a") === RunSuccess(Seq(), Seq()))
+    assert(_manyA.run("aa") === RunSuccess(Seq(), Seq()))
+    assert(_manyA.run("b") === RunSuccess(Seq(), Seq('b')))
+    assert(_manyA.run("ab") === RunSuccess(Seq(), Seq('b')))
+    assert(_manyA.run("aab") === RunSuccess(Seq(), Seq('b')))
+  }
+
 
 }
 

@@ -172,7 +172,7 @@ trait PushParsers[I] {
   //
 
   object EmptyPushParser extends PushParser[Nothing] {
-    def push(i: I): PushResult[Nothing] = Return(true, Seq(), Nil)
+    def push(i: I): PushResult[Nothing] = Return(true, Seq(), i :: Nil)
     def flush(): FlushResult[Nothing] = Flushed(true, Seq())
   }
 
@@ -185,7 +185,7 @@ trait PushParsers[I] {
     def push(i: I): PushResult[O] = {
       p1.push(i) match {
         case Continue(committed1, out1, next1) => Continue(committed1, out1, new AndPushParser(next1, p2))
-        case Return(committed1, out1, unconsumed1) => p2.push(i) match {
+        case Return(committed1, out1, unconsumed1) => p2.pushAll(unconsumed1) match {
           case Continue(committed2, out2, next2) => Continue(committed1 || committed2, out1 ++ out2, next2)
           case Return(committed2, out2, unconsumed2) => Return(committed1 || committed2, out1 ++ out2, unconsumed2)
           case FailedPush(committed2) => FailedPush(committed1 || committed2)
