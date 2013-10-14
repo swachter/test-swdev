@@ -258,20 +258,20 @@ trait PushParsers[I] {
   }
 
   class FlatMapPushParser[O, T](p: PushParser[O], f: O => PushParser[T]) extends PushParser[T] {
+    def fMap(os: Seq[O]): PushParser[T] = os match {
+      case h :: t => f(h) ~ fMap(t)
+      case _ => EmptyPushParser
+    }
     def push(i: I): PushResult[T] = p.push(i) match {
       case r@Continue(committed, out, next) => if (out.isEmpty) {
         Continue(committed, Seq(), new FlatMapPushParser(next, f))
       } else {
-        throw new RuntimeException("a parser that outputs more than one token can not be flatMapped")
+        Continue(committed, Seq(), fMap(out) ~ new FlatMapPushParser(next, f))
       }
       case r@Return(committed, out, unconsumed) => if (out.isEmpty) {
         Return(committed, Seq(), unconsumed)
       } else {
-        if (!out.tail.isEmpty) {
-          throw new RuntimeException("a parser that outputs more than one token can not be flatMapped")
-        }
-        val o = out.head
-        val ppb = f(o)
+        val ppb = fMap(out)
         val ppb2 = if (committed) ppb.commit else ppb
         ppb2.pushAll(unconsumed)
       }
@@ -282,20 +282,15 @@ trait PushParsers[I] {
       case r@Flushed(committed1, out1, unconsumed1) => if (out1.isEmpty) {
         r.copy(out = Seq())
       } else {
-        if (!out1.tail.isEmpty) {
-          throw new RuntimeException("a parser that outputs more than one token can not be flatMapped")
-        } else {
-          val o = out1.head
-          val ppb = f(o)
-          val ppb2 = if (committed1) ppb.commit else ppb
-          ppb2.pushAll(unconsumed1) match {
-            case Continue(committed2, out2, next2) => next2.flush() match {
-              case Flushed(committed3, out3, unconsumed3) => Flushed(committed1 || committed2 || committed3, out3 ++ out2, unconsumed3)
-              case FailedFlush(committed3) => FailedFlush(committed1 || committed2 || committed3)
-            }
-            case Return(committed2, out2, unconsumed2) => Flushed(committed1 || committed2, out2, unconsumed2)
-            case r@FailedPush(committed2) => FailedFlush(committed1 || committed2)
+        val ppb = fMap(out1)
+        val ppb2 = if (committed1) ppb.commit else ppb
+        ppb2.pushAll(unconsumed1) match {
+          case Continue(committed2, out2, next2) => next2.flush() match {
+            case Flushed(committed3, out3, unconsumed3) => Flushed(committed1 || committed2 || committed3, out3 ++ out2, unconsumed3)
+            case FailedFlush(committed3) => FailedFlush(committed1 || committed2 || committed3)
           }
+          case Return(committed2, out2, unconsumed2) => Flushed(committed1 || committed2, out2, unconsumed2)
+          case r@FailedPush(committed2) => FailedFlush(committed1 || committed2)
         }
       }
       case r@FailedFlush(_) => r
