@@ -6,7 +6,7 @@ import scala.annotation.tailrec
 
 class PushParsersTest extends FunSuite {
 
-  val parsers = new CharPushParsers {
+  val parsers = new CharPushParsers[Char](c => c) {
 
     implicit def pushParser(string: String): PushParser[Char] = new EchoPushParser(string, false)
 

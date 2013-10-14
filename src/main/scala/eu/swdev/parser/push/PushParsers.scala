@@ -55,11 +55,11 @@ trait PushParsers[I] {
 
     def oneOrMore: PushParser[O] = this ~ this.many
     
-    def many: PushParser[O] = (this ~ many) | EmptyPushParser
+    def many: PushParser[O] = (this ~ many).attempt | EmptyPushParser
 
-    def optional: PushParser[O] = new OrPushParser(this, EmptyPushParser)
+    def optional: PushParser[O] = this.attempt | EmptyPushParser
 
-    def option: PushParser[Option[O]] = new OrPushParser(this.map(Some(_)), UnitPushParser(None))
+    def option: PushParser[Option[O]] = this.attempt.map(Some(_)) | UnitPushParser(None)
 
     def attempt: PushParser[O] = new PushParser[O] {
       def push(i: I): PushResult[O] = self.push(i) match {
@@ -165,7 +165,7 @@ trait PushParsers[I] {
 
   def unit[O](o: O) = UnitPushParser(o)
 
-  def ignore(input: Seq[I]): PushParser[Nothing] = new IgnorePushParser(input, false)
+  def ignore(input: Seq[I])(isSame: (I, I) => Boolean): PushParser[Nothing] = new IgnorePushParser(input, false)(isSame)
 
   //
   //
@@ -306,14 +306,14 @@ trait PushParsers[I] {
    * @param ignore
    * @param committed
    */
-  class IgnorePushParser(ignore: Seq[I], committed: Boolean) extends PushParser[Nothing] {
+  class IgnorePushParser(ignore: Seq[I], committed: Boolean)(isSame: (I, I) => Boolean) extends PushParser[Nothing] {
     def push(i: I): PushResult[Nothing] = if (ignore.isEmpty) {
       Return(committed, Seq(), i :: Nil)
-    } else if (i == ignore.head) {
+    } else if (isSame(i, ignore.head)) {
       if (ignore.tail.isEmpty) {
         Return(true, Seq(), Nil)
       } else {
-        Continue(true, Seq(), new IgnorePushParser(ignore.tail, true))
+        Continue(true, Seq(), new IgnorePushParser(ignore.tail, true)(isSame))
       }
     } else {
       FailedPush(committed)
@@ -352,22 +352,19 @@ trait PushParsers[I] {
 
 }
 
-trait CharPushParsers extends PushParsers[Char] {
+class CharPushParsers[C](charInput: C => Char) extends PushParsers[C] {
+
   import scala.util.matching.Regex
 
   class PatternPushParser(regex: String, greedy: Boolean) extends PushParser[String] {
 
     val pattern = Pattern.compile(regex)
 
-    def push(i: Char): PushResult[String] = {
+    def push(i: C): PushResult[String] = {
       if (pattern.matcher("").matches()) {
-        if (greedy) {
-          new Recorder(new StringBuilder, Some(0)).push(i)
-        } else {
-          new Recorder(new StringBuilder, Some(0)).push(i) // Return(true, Seq(""), Nil)
-        }
+        new Recorder(new StringBuilder, Some(0), Nil).push(i)
       } else {
-        new Recorder(new StringBuilder, None).push(i)
+        new Recorder(new StringBuilder, None, Nil).push(i)
       }
     }
 
@@ -380,15 +377,16 @@ trait CharPushParsers extends PushParsers[Char] {
 
     }
 
-    class Recorder(sb: StringBuilder, var foundMatch: Option[Int]) extends PushParser[String] {
+    class Recorder(sb: StringBuilder, var foundMatch: Option[Int], var unconsumed: List[C]) extends PushParser[String] {
       
-      def retReturn(idx: Int): Return[String] = Return(true, Seq(sb.substring(0, idx)), sb.substring(idx).to[List])
-      def retFlushed(idx: Int): Flushed[String] = Flushed(true, Seq(sb.substring(0, idx)), sb.substring(idx).to[List])
+      def retReturn(idx: Int): Return[String] = Return(true, Seq(sb.substring(0, idx)), unconsumed)
+      def retFlushed(idx: Int): Flushed[String] = Flushed(true, Seq(sb.substring(0, idx)), unconsumed)
       
-      def push(i: Char): PushResult[String] = {
-        sb.append(i)
+      def push(i: C): PushResult[String] = {
+        sb.append(charInput(i))
         val matcher = pattern.matcher(sb)
         if (matcher.matches()) {
+          unconsumed = Nil
           if (greedy) {
             // greedy: continue, maybe the regex matches even more characters
             foundMatch = Some(sb.length)
@@ -398,11 +396,13 @@ trait CharPushParsers extends PushParsers[Char] {
           }
         } else {
           // it does not match
+          unconsumed = i :: unconsumed
           if (matcher.hitEnd()) {
             // maybe after some more characters it matches
             if (greedy || foundMatch.isEmpty) {
               Continue(true, Seq(), this)
             } else {
+              // return until the last found match
               retReturn(foundMatch.get)
             }
           } else {

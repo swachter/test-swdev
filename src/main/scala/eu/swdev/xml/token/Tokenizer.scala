@@ -5,9 +5,9 @@ import scala.util.matching.Regex
 
 /**
  */
-class Tokenizer(val tokenHandler: TokenHandler) {
+class Tokenizer {
 
-  val XmlPushParsers = new CharPushParsers {
+  val XmlPushParsers = new CharPushParsers[Char](c => c) {
 
     var line = 1
     var column = 1
@@ -22,16 +22,16 @@ class Tokenizer(val tokenHandler: TokenHandler) {
     }
 
     // 1
-    val _document = _prolog ~ _element ~ _misc.many
+    lazy val _document = _prolog ~ _element ~ _misc.many
 
     // 2
-    val _Char = new PushParser[Char] {
+    lazy val _Char = new PushParser[Char] {
       def push(i: Char): PushResult[Char] = if (isChar(i)) Return(true, Seq(i), Nil) else FailedPush(true)
       def flush(): FlushResult[Char] = FailedFlush(true)
     }
 
     // 3
-    val _S = new PushParser[Nothing] {
+    lazy val _S = new PushParser[Nothing] {
       def push(i: Char): PushResult[Nothing] = if (isWhitespace(i)) {
         Return(true, Seq(), Nil)
       } else {
@@ -41,37 +41,42 @@ class Tokenizer(val tokenHandler: TokenHandler) {
     }.oneOrMore
 
     // 22
-    val _prolog: PushParser[Token] = _XmlDecl.optional
+    lazy val _prolog: PushParser[Token] = _XmlDecl.optional
     
     // 23
-    val _XmlDecl = "<?xml" ~ (_VersionInfo >>= ((vi: String) => (_EncodingDecl.option >>= ((ed: Option[String]) => (_SDDecl.option >>= ((sd: Option[String]) => unit(XmlDecl(vi, ed, sd)))))))) ~ _S.optional ~ "?>"
+    lazy val _XmlDecl = "<?xml" ~ (_VersionInfo >>= ((vi: String) => (_EncodingDecl.option >>= ((ed: Option[String]) => (_SDDecl.option >>= ((sd: Option[String]) => unit(XmlDecl(vi, ed, sd)))))))) ~ _S.optional ~ "?>"
 
     // 24
-    val _VersionInfo = _S ~ "version" ~ _Eq
+    lazy val _VersionInfo = _S ~ "version" ~ _Eq ~ quotes(_VersionNum)
 
     // 25
-    val _Eq = _S.optional ~ "=".ignore ~ _S.optional
+    lazy val _Eq = _S.optional ~ "=" ~ _S.optional
+
+    // 26
+    lazy val _VersionNum = "1\\.[0-9]+".p
 
     // 27
-    val _misc: PushParser[Token] = EmptyPushParser
+    lazy val _misc: PushParser[Token] = EmptyPushParser
 
     // 32
-    val _SDDecl = _S ~ "standalone" ~ _Eq ~ (("'" ~ "yes|no".p ~ "'") | (("\"" ~ "yes|no".p ~ "\"")))
+    lazy val _SDDecl = _S ~ "standalone" ~ _Eq ~ quotes("yes|no".p)
 
     // 39
-    val _element: PushParser[Token] = EmptyPushParser
+    lazy val _element: PushParser[Token] = EmptyPushParser
 
     // 80
-    val _EncodingDecl = _S ~ "encoding" ~ _Eq ~ (("'" ~ _EncName ~ "'") | (("\"" ~ _EncName ~ "\"")))
+    lazy val _EncodingDecl = _S ~ "encoding" ~ _Eq ~ quotes(_EncName)
 
     // 81
-    val _EncName = "[A-Za-z]([A-Za-z0-9,_]|-)*".p
+    lazy val _EncName = "[A-Za-z]([A-Za-z0-9,_]|-)*".p
+
+    def quotes[I](p: PushParser[I]): PushParser[I] = ("'" ~ p ~ "'") | (("\"" ~ p ~ "\""))
 
     //
     //
     //
     
-    implicit def pushParser(string: String): PushParser[Nothing] = new IgnorePushParser(string, false)
+    implicit def pushParser(string: String): PushParser[Nothing] = new IgnorePushParser(string, false)((c, d) => c == d)
 
     implicit class StrOps(string: String) {
       def p: PushParser[String] = new PatternPushParser(string, true)
