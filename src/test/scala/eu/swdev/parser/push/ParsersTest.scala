@@ -17,7 +17,7 @@ class ParsersTest extends FunSuite {
 
     val _ABorA = ('a' ~ 'b') or 'a'
 
-    val _AcommitBorA = ('a' ~ Commit(Halt()) ~ 'b') or 'a'
+    val _AcommitBorA = ('a' ~ commit ~ 'b') or 'a'
 
     val _AABorAB = ('a' ~ 'a' ~ 'b') or ('a' ~ 'b')
 
@@ -67,11 +67,11 @@ class ParsersTest extends FunSuite {
   }
 
   test("a{commit}b|a") {
-    assert(drive(_ABorA, "ab") === Success(Seq('a', 'b'), Seq()))
-    assert(drive(_ABorA, "a") === Failure(Seq('a'), Seq()))
-    assert(drive(_ABorA, "abc") === Success(Seq('a', 'b'), Seq('c')))
-    assert(drive(_ABorA, "ac") === Failure(Seq('a'), Seq('c')))
-    assert(drive(_ABorA, "c") === Failure(Seq(), Seq()))
+    assert(drive(_AcommitBorA, "ab") === Success(Seq('a', 'b'), Seq()))
+    assert(drive(_AcommitBorA, "a") === Failure(Seq('a'), Seq()))
+    assert(drive(_AcommitBorA, "abc") === Success(Seq('a', 'b'), Seq('c')))
+    assert(drive(_AcommitBorA, "ac") === Failure(Seq('a'), Seq()))
+    assert(drive(_AcommitBorA, "c") === Failure(Seq(), Seq()))
   }
 
   test("aab|ab") {
@@ -88,7 +88,7 @@ class ParsersTest extends FunSuite {
     assert(drive(_Amany, "aa") === Success(Seq('a', 'a'), Seq()))
     assert(drive(_Amany, "b") === Success(Seq(), Seq('b')))
     assert(drive(_Amany, "bb") === Success(Seq(), Seq('b', 'b')))
-    
+
   }
 
   test("a.oneOrMore") {

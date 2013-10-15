@@ -53,6 +53,8 @@ trait Parsers[I] {
 
   def unit[O](o: O): ParserState[O] = Emit(Seq(o), Halt())
 
+  def commit[O]: ParserState[O] = Commit(Halt())
+
   //
   //
   //
