@@ -11,7 +11,7 @@ trait Parsers[I] {
       case s@Error() => s
       case Mark(next) => Mark(next ~ p)
       case Reset(next) => Reset(next ~ p)
-      case Commit(next) => Commit(next ~ p)
+      case Commit(next, handle) => Commit(next ~ p, handle)
     }
 
     def |[O1 >: O](p: => ParserState[O1]): ParserState[O1] = Mark(this ||| p)
@@ -20,11 +20,32 @@ trait Parsers[I] {
     private def |||[O1 >: O](p: => ParserState[O1]): ParserState[O1] = this match {
       case Await(push, flush) => Await(push andThen (_ ||| p), flush ||| p)
       case Emit(out, next) => Emit(out, next ||| p)
-      case Halt() => Commit(Halt())
-      case Error() => Reset(p)
-      case Mark(next) => Mark(next ||| p)
-      case Reset(next) => Reset(next ||| p)
-      case Commit(next) => Commit(next)
+      case Halt() => {
+        // auto-commit the first alternative
+        // set the handle property to false because committing to the first alternative of this choice
+        // does not mean committing to alternatives of superordinate choices.
+        Commit(Halt(), false)
+      }
+      case Error() => {
+        // Reset and continue with the second alternative.
+        // Ignore any explicit commits that may be output by the second alternative because there is no more mark set.
+        // In other words: the second alternative runs unconditionally
+        Reset(ignoreCommit(p))
+      }
+      case Mark(next) => Mark(next ||| p)    // pass-through Mark of nested choice
+      case Reset(next) => Reset(next ||| p)  // pass-through Reset of nested choice
+      case Commit(next, handle) => {
+        if (handle) {
+          // there is an explicit commit for the first alternative
+          // -> commit the alternative, but ignore any further commits of its continuation
+          // -> set the handle property to false because committing to the first alternative of this choice
+          //    does not mean committing to alternatives of superordinate choices.
+          Commit(ignoreCommit(next), false)
+        } else {
+          // pass-through Commit of nested choice
+          Commit(next ||| p, false)
+        }
+      }
     }
 
     def many: ParserState[O] = (this ~ many) | Halt()
@@ -45,7 +66,19 @@ trait Parsers[I] {
 
   case class Reset[O](next: ParserState[O]) extends ParserState[O]
 
-  case class Commit[O](next: ParserState[O]) extends ParserState[O]
+  case class Commit[O](next: ParserState[O],
+                       // the handle property indicates if a commit must be handled by its enclosing choice or not
+                       handle: Boolean) extends ParserState[O]
+
+  private def ignoreCommit[O](p: => ParserState[O]): ParserState[O] = p match {
+    case Await(push, flush) => Await(push andThen (ignoreCommit(_)), ignoreCommit(flush))
+    case Emit(out, next) => Emit(out, ignoreCommit(next))
+    case s@Halt() => s
+    case s@Error() => s
+    case Mark(next) => Mark(ignoreCommit(next))
+    case Reset(next) => Reset(ignoreCommit(next))
+    case s@Commit(next, handle) => if (handle) ignoreCommit(next) else s
+  }
 
   //
   //
@@ -53,7 +86,7 @@ trait Parsers[I] {
 
   def unit[O](o: O): ParserState[O] = Emit(Seq(o), Halt())
 
-  def commit[O]: ParserState[O] = Commit(Halt())
+  def commit[O]: ParserState[O] = Commit(Halt(), true)
 
   //
   //
@@ -61,7 +94,7 @@ trait Parsers[I] {
 
   def run[O](ps: ParserState[O], runState: RunState[O], log: List[ParserState[O]]): (RunResult[O], List[ParserState[O]]) = {
     ps match {
-      case Await(push, flush) => runState.in match {
+      case Await(push, flush) => runState.input match {
         case Some(i) => run(push(i), runState.next, ps :: log)
         case None => run(flush, runState, ps :: log)
       }
@@ -70,7 +103,7 @@ trait Parsers[I] {
       case Error() => (Failure(runState.result.reverse, runState.unconsumed), ps :: log)
       case Mark(next) => run(next, runState.mark, ps :: log)
       case Reset(next) => run(next, runState.reset, ps :: log)
-      case Commit(next) => run(next, runState.commit, ps :: log)
+      case Commit(next, handle) => run(next, runState.commit, ps :: log)
     }
   }
 
@@ -82,7 +115,7 @@ trait Parsers[I] {
 
     def next: RunState[O]
 
-    def in: Option[I]
+    def input: Option[I]
     def output(o: List[O]): RunState[O]
 
     def unconsumed: List[I]
@@ -91,7 +124,7 @@ trait Parsers[I] {
 
   abstract class ListRunState[O](val unconsumed: List[I], val result: List[O]) extends RunState[O] {
     def mark: RunState[O] = new MarkedListRunState(unconsumed, Nil, unconsumed, this)
-    def in: Option[I] = unconsumed.headOption
+    def input: Option[I] = unconsumed.headOption
     def advance(newUnconsumed: List[I], out: List[O]): ListRunState[O]
   }
 

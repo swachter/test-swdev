@@ -19,6 +19,8 @@ class ParsersTest extends FunSuite {
 
     val _AcommitBorA = ('a' ~ commit ~ 'b') or 'a'
 
+    val _AcommitBorAorA = (('a' ~ commit ~ 'b') or 'a') or 'a'
+
     val _AABorAB = ('a' ~ 'a' ~ 'b') or ('a' ~ 'b')
 
     val _Amany = 'a'.many
@@ -72,6 +74,15 @@ class ParsersTest extends FunSuite {
     assert(drive(_AcommitBorA, "abc") === Success(Seq('a', 'b'), Seq('c')))
     assert(drive(_AcommitBorA, "ac") === Failure(Seq('a'), Seq()))
     assert(drive(_AcommitBorA, "c") === Failure(Seq(), Seq()))
+  }
+
+  test("(a{commit}b|a)|a") {
+    // ensure that a commit in an inner choice does not prevent the second alternativ of an outer choice
+    assert(drive(_AcommitBorAorA, "ab") === Success(Seq('a', 'b'), Seq()))
+    assert(drive(_AcommitBorAorA, "a") === Success(Seq('a'), Seq()))
+    assert(drive(_AcommitBorAorA, "abc") === Success(Seq('a', 'b'), Seq('c')))
+    assert(drive(_AcommitBorAorA, "ac") === Success(Seq('a'), Seq('c')))
+    assert(drive(_AcommitBorAorA, "c") === Failure(Seq(), Seq()))
   }
 
   test("aab|ab") {
