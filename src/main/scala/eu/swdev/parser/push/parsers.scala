@@ -1,12 +1,12 @@
 package eu.swdev.parser.push
 
-trait Parsers[I] {
+trait Parsers {
 
-  sealed trait ParserState[+O] { self =>
+  sealed trait ParserState[-I, +O] { self =>
 
-    def ~[O1 >: O](p: => ParserState[O1]): ParserState[O1] = this and p
+    def ~[I1 <: I, O1 >: O](p: => ParserState[I1, O1]): ParserState[I1, O1] = this and p
 
-    def and[O1 >: O](p: => ParserState[O1]): ParserState[O1] = this match {
+    def and[I1 <: I, O1 >: O](p: => ParserState[I1, O1]): ParserState[I1, O1] = this match {
       case Await(push, flush) => Await(push andThen (_ ~ p), flush ~ p)
       case Emit(out, next) => Emit(out, next ~ p)
       case Halt() => p
@@ -16,11 +16,11 @@ trait Parsers[I] {
       case Commit(next, handle) => Commit(next ~ p, handle)
     }
 
-    def |[O1 >: O](p: => ParserState[O1]): ParserState[O1] = this or p
+    def |[I1 <: I, O1 >: O](p: => ParserState[I1, O1]): ParserState[I1, O1] = this or p
 
-    def or[O1 >: O](p: => ParserState[O1]): ParserState[O1] = Mark(this ||| p)
+    def or[I1 <: I, O1 >: O](p: => ParserState[I1, O1]): ParserState[I1, O1] = Mark(this ||| p)
 
-    private def |||[O1 >: O](p: => ParserState[O1]): ParserState[O1] = this match {
+    private def |||[I1 <: I, O1 >: O](p: => ParserState[I1, O1]): ParserState[I1, O1] = this match {
       case Await(push, flush) => Await(push andThen (_ ||| p), flush ||| p)
       case Emit(out, next) => Emit(out, next ||| p)
       case Halt() => {
@@ -51,13 +51,13 @@ trait Parsers[I] {
       }
     }
 
-    def many: ParserState[O] = (this ~ many) | Halt()
+    def many: ParserState[I, O] = (this ~ many) | Halt()
 
-    def oneOrMore: ParserState[O] = this ~ many
+    def oneOrMore: ParserState[I, O] = this ~ many
 
-    def >>=[T](f: O => ParserState[T]): ParserState[T] = this flatMap f
+    def >>=[I1 <: I, T](f: O => ParserState[I1, T]): ParserState[I1, T] = this flatMap f
 
-    def flatMap[T](f: O => ParserState[T]): ParserState[T] = this match {
+    def flatMap[I1 <: I, T](f: O => ParserState[I1, T]): ParserState[I1, T] = this match {
       case Await(push, flush) => Await(push andThen (_ >>= f), flush >>= f)
       case Emit(out, next) => {
         // for each output o: apply the function f to get a ParserState[T]
@@ -74,7 +74,7 @@ trait Parsers[I] {
       case Commit(next, handle) => Commit(next >>= f, handle)
     }
 
-    def map[O1](f: O => O1): ParserState[O1] = this match {
+    def map[O1](f: O => O1): ParserState[I, O1] = this match {
       case Await(push, flush) => Await(push andThen (_ map f), flush map f)
       case Emit(out, next) => Emit(out map f, next map f)
       case s@Halt() => s
@@ -86,28 +86,55 @@ trait Parsers[I] {
 
     def ? = optional
 
-    def optional: ParserState[O] = this | Halt()
+    def optional: ParserState[I, O] = this | Halt()
 
-    def option: ParserState[Option[O]] = map(Some(_)) | unit(None)
+    def option: ParserState[I, Option[O]] = map(Some(_)) | unit(None)
+
+    def |>[O2](p2: ParserState[O, O2]): ParserState[I, O2] = this pipe p2
+
+    def pipe[O2](p2: ParserState[O, O2]): ParserState[I, O2] = {
+      p2 match {
+        case Await(push2, flush2) => this match {
+          case Await(push, flush) => Await(push andThen (_ |> p2), flush  |> p2)
+          case Emit(out, next) => {
+            out match {
+              case h :: t => (Emit(t, next): ParserState[I, O]) |> push2(h)
+              case _ => next |> flush2
+            }
+          }
+          case s@Halt() => s |> flush2 //(s: ParserState[I, O]) |> flush2 // TODO remove type annotation
+          case s@Error() => s
+          case Mark(next) => Mark(next |> p2)
+          case Reset(next) => Reset(next |> p2)
+          case Commit(next, handle) => Commit(next |> p2, handle)
+        }
+        case Emit(out2, next2) => Emit(out2, this |> next2)
+        case s@Halt() => s
+        case s@Error() => s
+        case Mark(next2) => Mark(this |> next2)
+        case Reset(next2) => Reset(this |> next2)
+        case Commit(next2, handle2) => Commit(this |> next2, handle2)
+      }
+    }
   }
 
-  case class Await[O](push: I => ParserState[O], flush: ParserState[O]) extends ParserState[O]
+  case class Await[I, O](push: I => ParserState[I, O], flush: ParserState[I, O]) extends ParserState[I, O]
 
-  case class Emit[O](out: Seq[O], next: ParserState[O]) extends ParserState[O]
+  case class Emit[I, O](out: Seq[O], next: ParserState[I, O]) extends ParserState[I, O]
 
-  case class Halt[O]() extends ParserState[Nothing]
+  case class Halt[I, O]() extends ParserState[Any, Nothing]
 
-  case class Error[O]() extends ParserState[Nothing]
+  case class Error[I, O]() extends ParserState[Any, Nothing]
 
-  case class Mark[O](next: ParserState[O]) extends ParserState[O]
+  case class Mark[I, O](next: ParserState[I, O]) extends ParserState[I, O]
 
-  case class Reset[O](next: ParserState[O]) extends ParserState[O]
+  case class Reset[I, O](next: ParserState[I, O]) extends ParserState[I, O]
 
-  case class Commit[O](next: ParserState[O],
+  case class Commit[I, O](next: ParserState[I, O],
                        // the handle property indicates if a commit must be handled by its enclosing choice or not
-                       handle: Boolean) extends ParserState[O]
+                       handle: Boolean) extends ParserState[I, O]
 
-  private def ignoreCommit[O](p: => ParserState[O]): ParserState[O] = p match {
+  private def ignoreCommit[I, O](p: => ParserState[I, O]): ParserState[I, O] = p match {
     case Await(push, flush) => Await(push andThen (ignoreCommit(_)), ignoreCommit(flush))
     case Emit(out, next) => Emit(out, ignoreCommit(next))
     case s@Halt() => s
@@ -121,9 +148,9 @@ trait Parsers[I] {
   //
   //
 
-  def unit[O](o: O): ParserState[O] = Emit(Seq(o), Halt())
+  def unit[I, O](o: O): ParserState[I, O] = Emit(Seq(o), Halt())
 
-  def commit[O]: ParserState[O] = Commit(Halt(), true)
+  def commit[I, O]: ParserState[I, O] = Commit(Halt(), true)
 
   //
   //
@@ -140,7 +167,7 @@ trait Parsers[I] {
    * @tparam O
    * @return
    */
-  def run[O](ps: ParserState[O], runState: RunState[O], log: List[ParserState[O]]): (RunResult[O], List[ParserState[O]]) = {
+  def run[I, O](ps: ParserState[I, O], runState: RunState[I, O], log: List[ParserState[I, O]]): (RunResult[I, O], List[ParserState[I, O]]) = {
     ps match {
       case Await(push, flush) => runState.input match {
         case Some(i) => run(push(i), runState.next, ps :: log)
@@ -155,52 +182,52 @@ trait Parsers[I] {
     }
   }
 
-  trait RunState[O] {
+  trait RunState[I, O] {
 
-    def mark: RunState[O]
-    def commit: RunState[O]
-    def reset: RunState[O]
+    def mark: RunState[I, O]
+    def commit: RunState[I, O]
+    def reset: RunState[I, O]
 
-    def next: RunState[O]
+    def next: RunState[I, O]
 
     def input: Option[I]
-    def output(o: List[O]): RunState[O]
+    def output(o: List[O]): RunState[I, O]
 
     def unconsumed: List[I]
     def result: List[O]
   }
 
-  abstract class ListRunState[O](val unconsumed: List[I], val result: List[O]) extends RunState[O] {
-    def mark: RunState[O] = new MarkedListRunState(unconsumed, Nil, unconsumed, this)
+  abstract class ListRunState[I, O](val unconsumed: List[I], val result: List[O]) extends RunState[I, O] {
+    def mark: RunState[I, O] = new MarkedListRunState(unconsumed, Nil, unconsumed, this)
     def input: Option[I] = unconsumed.headOption
-    def advance(newUnconsumed: List[I], out: List[O]): ListRunState[O]
+    def advance(newUnconsumed: List[I], out: List[O]): ListRunState[I, O]
   }
 
-  class RootListRunState[O](unconsumed: List[I], result: List[O]) extends ListRunState[O](unconsumed, result) {
-    def commit: RunState[O] = throw new RuntimeException("input can not be committed - it has not been marked")
-    def reset: RunState[O] = throw new RuntimeException("input can not be reset - it has not been marked")
-    def next: RunState[O] = unconsumed match {
+  class RootListRunState[I, O](unconsumed: List[I], result: List[O]) extends ListRunState[I, O](unconsumed, result) {
+    def commit: RunState[I, O] = throw new RuntimeException("input can not be committed - it has not been marked")
+    def reset: RunState[I, O] = throw new RuntimeException("input can not be reset - it has not been marked")
+    def next: RunState[I, O] = unconsumed match {
       case h :: t => new RootListRunState(t, result)
       case _ => new RootListRunState(unconsumed, result)
     }
-    def output(o: List[O]): RunState[O] = new RootListRunState(unconsumed, o ++ result)
-    def advance(newUnconsumed: List[I], out: List[O]): ListRunState[O] = new RootListRunState[O](newUnconsumed, out ++ result)
+    def output(o: List[O]): RunState[I, O] = new RootListRunState(unconsumed, o ++ result)
+    def advance(newUnconsumed: List[I], out: List[O]): ListRunState[I, O] = new RootListRunState(newUnconsumed, out ++ result)
   }
 
-  class MarkedListRunState[O](unconsumed: List[I], result: List[O], mark: List[I], parent: ListRunState[O]) extends ListRunState[O](unconsumed, result) {
-    def commit: RunState[O] = parent.advance(unconsumed, result) // result.foldRight(parent)((o, d) => d.out(o))
-    def reset: RunState[O] = parent
-    def next: RunState[O] = unconsumed match {
+  class MarkedListRunState[I, O](unconsumed: List[I], result: List[O], mark: List[I], parent: ListRunState[I, O]) extends ListRunState[I, O](unconsumed, result) {
+    def commit: RunState[I, O] = parent.advance(unconsumed, result) // result.foldRight(parent)((o, d) => d.out(o))
+    def reset: RunState[I, O] = parent
+    def next: RunState[I, O] = unconsumed match {
       case h :: t => new MarkedListRunState(t, result, mark, parent)
       case _ => new MarkedListRunState(unconsumed, result, mark, parent)
     }
-    def output(o: List[O]): RunState[O] = new MarkedListRunState(unconsumed, o ++ result, mark, parent)
-    def advance(newUnconsumed: List[I], out: List[O]): ListRunState[O] = new MarkedListRunState[O](newUnconsumed, out ++ result, mark, parent)
+    def output(o: List[O]): RunState[I, O] = new MarkedListRunState(unconsumed, o ++ result, mark, parent)
+    def advance(newUnconsumed: List[I], out: List[O]): ListRunState[I, O] = new MarkedListRunState(newUnconsumed, out ++ result, mark, parent)
   }
 
-  sealed trait RunResult[O]
-  case class Success[O](out: Seq[O], unconsumed: Seq[I]) extends RunResult[O]
-  case class Failure[O](out: Seq[O], unconsumed: Seq[I]) extends RunResult[O]
+  sealed trait RunResult[I, O]
+  case class Success[I, O](out: Seq[O], unconsumed: Seq[I]) extends RunResult[I, O]
+  case class Failure[I, O](out: Seq[O], unconsumed: Seq[I]) extends RunResult[I, O]
 
   //
   //
@@ -209,6 +236,6 @@ trait Parsers[I] {
 
 }
 
-trait CharParsers extends Parsers[Char] {
+trait CharParsers extends Parsers {
 
 }

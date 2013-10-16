@@ -6,14 +6,16 @@ import org.scalatest.FunSuite
   */
 class ParsersTest extends FunSuite {
 
-  val parsers = new Parsers[Char] {
+  val parsers = new Parsers {
+
+    type PS = ParserState[Char, Char]
 
     val _AandB = 'a' ~ 'b'
 
-    val _AorB: ParserState[Char] = 'a' or 'b'
+    val _AorB: PS = 'a' or 'b'
 
-    val _AorBorC1: ParserState[Char] = ('a' or 'b') or 'c'
-    val _AorBorC2: ParserState[Char] = 'a' or ('b' or 'c')
+    val _AorBorC1: PS = ('a' or 'b') or 'c'
+    val _AorBorC2: PS = 'a' or ('b' or 'c')
 
     val _ABorA = ('a' ~ 'b') or 'a'
 
@@ -31,12 +33,12 @@ class ParsersTest extends FunSuite {
 
     val _Aoption = 'a'.option
 
-    val _AbindB: ParserState[(Char, Char)] = 'a' >>= (a => 'b' >>= (b => unit((a, b))))
+    val _AbindB: ParserState[Char, (Char, Char)] = 'a' >>= (a => 'b' >>= (b => unit((a, b))))
     
-    implicit def parser(char: Char): ParserState[Char] = Await(c => if (c == char) Emit(Seq(c), Halt()) else Error(), Error())
+    implicit def parser(char: Char): PS = Await(c => if (c == char) Emit(Seq(c), Halt()) else Error(), Error())
 
-    def drive[O](ps: ParserState[O], string: String): RunResult[O] = {
-      val (rr, log) = run(ps, new RootListRunState(string.to[List], Nil), Nil)
+    def drive[O](ps: ParserState[Char, O], string: String): RunResult[Char, O] = {
+      val (rr, log) = run(ps, new RootListRunState[Char, O](string.to[List], Nil), Nil)
       println(log)
       rr
     }
@@ -59,11 +61,11 @@ class ParsersTest extends FunSuite {
   }
 
   test("(a|b)|c") {
-    AorBorC(parsers._AorBorC1.asInstanceOf[parsers.ParserState[Char]])
+    AorBorC(parsers._AorBorC1.asInstanceOf[parsers.PS])
   }
 
   test("a|(b|c)") {
-    AorBorC(parsers._AorBorC2.asInstanceOf[parsers.ParserState[Char]])
+    AorBorC(parsers._AorBorC2.asInstanceOf[parsers.PS])
   }
 
   test("ab|a") {
@@ -135,7 +137,7 @@ class ParsersTest extends FunSuite {
     assert(drive(_AbindB, "b") === Failure(Seq(), Seq()))
   }
 
-  def AorBorC(ps: parsers.ParserState[Char]): Unit = {
+  def AorBorC(ps: parsers.PS): Unit = {
     assert(drive(ps, "a") === Success(Seq('a'), Seq()))
     assert(drive(ps, "b") === Success(Seq('b'), Seq()))
     assert(drive(ps, "c") === Success(Seq('c'), Seq()))
