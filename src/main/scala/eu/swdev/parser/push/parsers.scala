@@ -4,7 +4,9 @@ trait Parsers[I] {
 
   sealed trait ParserState[+O] { self =>
 
-    def ~[O1 >: O](p: => ParserState[O1]): ParserState[O1] = this match {
+    def ~[O1 >: O](p: => ParserState[O1]): ParserState[O1] = this and p
+
+    def and[O1 >: O](p: => ParserState[O1]): ParserState[O1] = this match {
       case Await(push, flush) => Await(push andThen (_ ~ p), flush ~ p)
       case Emit(out, next) => Emit(out, next ~ p)
       case Halt() => p
@@ -14,8 +16,9 @@ trait Parsers[I] {
       case Commit(next, handle) => Commit(next ~ p, handle)
     }
 
-    def |[O1 >: O](p: => ParserState[O1]): ParserState[O1] = Mark(this ||| p)
-    def or[O1 >: O](p: => ParserState[O1]): ParserState[O1] = this | p
+    def |[O1 >: O](p: => ParserState[O1]): ParserState[O1] = this or p
+
+    def or[O1 >: O](p: => ParserState[O1]): ParserState[O1] = Mark(this ||| p)
 
     private def |||[O1 >: O](p: => ParserState[O1]): ParserState[O1] = this match {
       case Await(push, flush) => Await(push andThen (_ ||| p), flush ||| p)
@@ -52,15 +55,49 @@ trait Parsers[I] {
 
     def oneOrMore: ParserState[O] = this ~ many
 
+    def >>=[T](f: O => ParserState[T]): ParserState[T] = this flatMap f
+
+    def flatMap[T](f: O => ParserState[T]): ParserState[T] = this match {
+      case Await(push, flush) => Await(push andThen (_ >>= f), flush >>= f)
+      case Emit(out, next) => {
+        // for each output o: apply the function f to get a ParserState[T]
+        // joins these parser states with the final (next >>= f)
+        // f(on) ~ ... ~ f(o1) ~ (next >>= f)
+        // NB: The oldest output is on and the latest output is o1.
+        //     Therefore the concatenation starts with f(on).
+        out.foldLeft(next >>= f)((ps, o) => f(o) ~ ps)
+      }
+      case s@Halt() => s
+      case s@Error() => s
+      case Mark(next) => Mark(next >>= f)
+      case Reset(next) => Reset(next >>= f)
+      case Commit(next, handle) => Commit(next >>= f, handle)
+    }
+
+    def map[O1](f: O => O1): ParserState[O1] = this match {
+      case Await(push, flush) => Await(push andThen (_ map f), flush map f)
+      case Emit(out, next) => Emit(out map f, next map f)
+      case s@Halt() => s
+      case s@Error() => s
+      case Mark(next) => Mark(next map f)
+      case Reset(next) => Reset(next map f)
+      case Commit(next, handle) => Commit(next map f, handle)
+    }
+
+    def ? = optional
+
+    def optional: ParserState[O] = this | Halt()
+
+    def option: ParserState[Option[O]] = map(Some(_)) | unit(None)
   }
 
   case class Await[O](push: I => ParserState[O], flush: ParserState[O]) extends ParserState[O]
 
   case class Emit[O](out: Seq[O], next: ParserState[O]) extends ParserState[O]
 
-  case class Halt[O]() extends ParserState[O]
+  case class Halt[O]() extends ParserState[Nothing]
 
-  case class Error[O]() extends ParserState[O]
+  case class Error[O]() extends ParserState[Nothing]
 
   case class Mark[O](next: ParserState[O]) extends ParserState[O]
 
@@ -92,6 +129,17 @@ trait Parsers[I] {
   //
   //
 
+  /**
+   * Runs the parser state until its end or until the run state has no more input.
+   *
+   * The encountered parser states are collected for debugging.
+   *
+   * @param ps
+   * @param runState
+   * @param log
+   * @tparam O
+   * @return
+   */
   def run[O](ps: ParserState[O], runState: RunState[O], log: List[ParserState[O]]): (RunResult[O], List[ParserState[O]]) = {
     ps match {
       case Await(push, flush) => runState.input match {

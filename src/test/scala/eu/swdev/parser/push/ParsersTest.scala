@@ -26,6 +26,12 @@ class ParsersTest extends FunSuite {
     val _Amany = 'a'.many
 
     val _AoneOrMore = 'a'.oneOrMore
+
+    val _Aoptional = 'a'?
+
+    val _Aoption = 'a'.option
+
+    val _AbindB: ParserState[(Char, Char)] = 'a' >>= (a => 'b' >>= (b => unit((a, b))))
     
     implicit def parser(char: Char): ParserState[Char] = Await(c => if (c == char) Emit(Seq(c), Halt()) else Error(), Error())
 
@@ -99,7 +105,6 @@ class ParsersTest extends FunSuite {
     assert(drive(_Amany, "aa") === Success(Seq('a', 'a'), Seq()))
     assert(drive(_Amany, "b") === Success(Seq(), Seq('b')))
     assert(drive(_Amany, "bb") === Success(Seq(), Seq('b', 'b')))
-
   }
 
   test("a.oneOrMore") {
@@ -109,6 +114,25 @@ class ParsersTest extends FunSuite {
     assert(drive(_AoneOrMore, "ab") === Success(Seq('a'), Seq('b')))
     assert(drive(_AoneOrMore, "aabb") === Success(Seq('a', 'a'), Seq('b', 'b')))
     assert(drive(_AoneOrMore, "b") === Failure(Seq(), Seq()))
+  }
+
+  test("a?") {
+    assert(drive(_Aoptional, "") === Success(Seq(), Seq()))
+    assert(drive(_Aoptional, "a") === Success(Seq(('a')), Seq()))
+    assert(drive(_Aoptional, "ab") === Success(Seq('a'), Seq('b')))
+  }
+
+  test("a{option}") {
+    assert(drive(_Aoption, "") === Success(Seq(None), Seq()))
+    assert(drive(_Aoption, "a") === Success(Seq((Some('a'))), Seq()))
+    assert(drive(_Aoption, "ab") === Success(Seq(Some('a')), Seq('b')))
+  }
+
+  test("a{bind}b") {
+    assert(drive(_AbindB, "ab") === Success(Seq(('a', 'b')), Seq()))
+    assert(drive(_AbindB, "abc") === Success(Seq(('a', 'b')), Seq('c')))
+    assert(drive(_AbindB, "ac") === Failure(Seq(), Seq()))
+    assert(drive(_AbindB, "b") === Failure(Seq(), Seq()))
   }
 
   def AorBorC(ps: parsers.ParserState[Char]): Unit = {
