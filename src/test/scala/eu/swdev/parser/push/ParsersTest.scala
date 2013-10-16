@@ -34,7 +34,13 @@ class ParsersTest extends FunSuite {
     val _Aoption = 'a'.option
 
     val _AbindB: ParserState[Char, (Char, Char)] = 'a' >>= (a => 'b' >>= (b => unit((a, b))))
-    
+
+    val _ApipeA = 'a' |> 'a'
+
+    val _AorBpipeAorB = ('a' or 'b') |> ('a' or 'b')
+
+    val _AorBpipeABorA = ('a' or 'b') |> (('a' ~ 'b') or 'a')
+
     implicit def parser(char: Char): PS = Await(c => if (c == char) Emit(Seq(c), Halt()) else Error(), Error())
 
     def drive[O](ps: ParserState[Char, O], string: String): RunResult[Char, O] = {
@@ -135,6 +141,28 @@ class ParsersTest extends FunSuite {
     assert(drive(_AbindB, "abc") === Success(Seq(('a', 'b')), Seq('c')))
     assert(drive(_AbindB, "ac") === Failure(Seq(), Seq()))
     assert(drive(_AbindB, "b") === Failure(Seq(), Seq()))
+  }
+
+  test("a|>a") {
+    assert(drive(_ApipeA, "a") === Success(Seq('a'), Seq()))
+    assert(drive(_ApipeA, "ab") === Success(Seq('a'), Seq('b')))
+    assert(drive(_ApipeA, "") === Failure(Seq(), Seq()))
+    assert(drive(_ApipeA, "b") === Failure(Seq(), Seq()))
+  }
+
+  test("(a|b)|>(a|b)") {
+    assert(drive(_AorBpipeAorB, "a") === Success(Seq('a'), Seq()))
+    assert(drive(_AorBpipeAorB, "b") === Success(Seq('b'), Seq()))
+    assert(drive(_AorBpipeAorB, "bbc") === Success(Seq('b'), Seq('b', 'c')))
+    assert(drive(_AorBpipeAorB, "x") === Failure(Seq(), Seq()))
+  }
+
+  test("(a|b)|>(ab|a)") {
+    assert(drive(_AorBpipeABorA, "ab") === Success(Seq('a', 'b'), Seq()))
+    assert(drive(_AorBpipeABorA, "a") === Success(Seq('a'), Seq()))
+    assert(drive(_AorBpipeABorA, "abc") === Success(Seq('a', 'b'), Seq('c')))
+    assert(drive(_AorBpipeABorA, "ac") === Success(Seq('a'), Seq('c')))
+    assert(drive(_AorBpipeABorA, "c") === Failure(Seq(), Seq()))
   }
 
   def AorBorC(ps: parsers.PS): Unit = {

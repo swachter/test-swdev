@@ -90,9 +90,9 @@ trait Parsers {
 
     def option: ParserState[I, Option[O]] = map(Some(_)) | unit(None)
 
-    def |>[O2](p2: ParserState[O, O2]): ParserState[I, O2] = this pipe p2
+    def |>[I1 >: O, O2](p2: ParserState[I1, O2]): ParserState[I, O2] = this pipe p2
 
-    def pipe[O2](p2: ParserState[O, O2]): ParserState[I, O2] = {
+    def pipe[I1 >: O, O2](p2: ParserState[I1, O2]): ParserState[I, O2] = {
       p2 match {
         case Await(push2, flush2) => this match {
           case Await(push, flush) => Await(push andThen (_ |> p2), flush  |> p2)
@@ -102,7 +102,7 @@ trait Parsers {
               case _ => next |> flush2
             }
           }
-          case s@Halt() => s |> flush2 //(s: ParserState[I, O]) |> flush2 // TODO remove type annotation
+          case s@Halt() => s |> flush2
           case s@Error() => s
           case Mark(next) => Mark(next |> p2)
           case Reset(next) => Reset(next |> p2)
@@ -111,11 +111,12 @@ trait Parsers {
         case Emit(out2, next2) => Emit(out2, this |> next2)
         case s@Halt() => s
         case s@Error() => s
-        case Mark(next2) => Mark(this |> next2)
-        case Reset(next2) => Reset(this |> next2)
-        case Commit(next2, handle2) => Commit(this |> next2, handle2)
+        case Mark(next2) => markedPipe(this, next2, PipeRecorder(Nil, Nil, Nil))
+        case Reset(next2) => throw new RuntimeException("pipe can not be reset - it has not been marked")
+        case Commit(next2, handle2) => this |> next2 // ignore commit - pipe has not been marked
       }
     }
+
   }
 
   case class Await[I, O](push: I => ParserState[I, O], flush: ParserState[I, O]) extends ParserState[I, O]
@@ -145,6 +146,74 @@ trait Parsers {
   }
 
   //
+  //
+  //
+
+  private case class PipeRecorder[I, O](recordedInput: Seq[I], recordedOutput: Seq[O], unconsumedInput: Seq[I]) {
+    def recordInput(in: Seq[I]): PipeRecorder[I, O] = copy(recordedInput = in ++ recordedInput, unconsumedInput = in.reverse)
+    def peek(): Option[I] = unconsumedInput.headOption
+    def recordOutput(out: Seq[O]): PipeRecorder[I, O] = copy(recordedOutput = out ++ recordedOutput)
+    def consumed(): PipeRecorder[I, O] = copy(unconsumedInput = unconsumedInput.tail)
+  }
+
+  private def markedPipe[I, M, O](p1: ParserState[I, M], p2: ParserState[M, O], rec: PipeRecorder[M, O]): ParserState[I, O] = {
+    p2 match {
+      case Await(push2, flush2) => {
+        // the right parser needs input
+        rec.peek() match {
+          case Some(o) => {
+            // there is some recorded input -> apply it to the right parser
+            markedPipe(p1, push2(o), rec.consumed)
+          }
+          case None => {
+            // there is no recorded input -> check the left parser
+            p1 match {
+              case Await(push, flush) => {
+                // the left parser needs input
+                // if there is input then recurse with the new state of the left parser
+                // otherwise recurse with the flush state of the left parser
+                Await(push andThen (markedPipe(_, p2, rec)), markedPipe(flush, p2, rec))
+              }
+              case Emit(out, next) => {
+                // the left parser outputs some tokens -> record them and recurse
+                markedPipe(next, p2, rec.recordInput(out))
+              }
+              case s@Halt() => {
+                // the left parser is halted -> flush the right parser
+                markedPipe(s, flush2, rec)
+              }
+              case s@Error() => s
+              case Mark(next) => Mark(markedPipe(next, p2, rec)) // pass-through Mark of left parser
+              case Reset(next) => Reset(markedPipe(next, p2, rec)) // pass-through Reset of left parser
+              case Commit(next, handle) => Commit(markedPipe(next, p2, rec), handle)  // pass-through Commit of left parser
+            }
+          }
+        }
+      }
+      case Emit(out2, next2) => {
+        // the right parser outputs some tokens -> record them and recurse
+        markedPipe(p1, next2, rec.recordOutput(out2))
+      }
+      case s@Halt() => {
+        // emit the recorded output
+        Emit(rec.recordedOutput, Halt())
+      }
+      case s@Error() => s
+      case Mark(next2) => {
+        markedPipe(p1, next2, PipeRecorder(Nil, Nil, Nil))
+      }
+      case Reset(next2) => {
+        // replay the recorded input by replacing the left parser with Emit(rec.recordedInput, p1)
+        // pipe the new left parser into the next right parser
+        Emit(rec.recordedInput, p1) |> next2
+      }
+      case Commit(next2, handle2) => {
+        Emit(rec.recordedOutput, Emit(rec.recordedInput, p1) |> next2)
+      }
+    }
+  }
+
+    //
   //
   //
 
@@ -204,7 +273,7 @@ trait Parsers {
   }
 
   class RootListRunState[I, O](unconsumed: List[I], result: List[O]) extends ListRunState[I, O](unconsumed, result) {
-    def commit: RunState[I, O] = throw new RuntimeException("input can not be committed - it has not been marked")
+    def commit: RunState[I, O] = this // ignore commit - run state has not been marked
     def reset: RunState[I, O] = throw new RuntimeException("input can not be reset - it has not been marked")
     def next: RunState[I, O] = unconsumed match {
       case h :: t => new RootListRunState(t, result)
