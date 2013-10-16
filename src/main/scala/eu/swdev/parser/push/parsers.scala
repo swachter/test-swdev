@@ -135,14 +135,27 @@ trait Parsers {
                        // the handle property indicates if a commit must be handled by its enclosing choice or not
                        handle: Boolean) extends ParserState[I, O]
 
-  private def ignoreCommit[I, O](p: => ParserState[I, O]): ParserState[I, O] = p match {
+  // Ignores all commits whose handle property is true. Commits whose handle property is false are forwarded.
+  // This is used to filter all commits after the the first alternative of a choice was committed or
+  // after a choice resumed with its second alternative.
+  private def ignoreCommit[I, O](p: ParserState[I, O]): ParserState[I, O] = p match {
     case Await(push, flush) => Await(push andThen (ignoreCommit(_)), ignoreCommit(flush))
     case Emit(out, next) => Emit(out, ignoreCommit(next))
     case s@Halt() => s
     case s@Error() => s
     case Mark(next) => Mark(ignoreCommit(next))
     case Reset(next) => Reset(ignoreCommit(next))
-    case s@Commit(next, handle) => if (handle) ignoreCommit(next) else s
+    case s@Commit(next, handle) => if (handle) ignoreCommit(next) else Commit(ignoreCommit(next), handle)
+  }
+
+  private def ignoreAllCommits[I, O](p: ParserState[I, O]): ParserState[I, O] = p match {
+    case Await(push, flush) => Await(push andThen (ignoreAllCommits(_)), ignoreAllCommits(flush))
+    case Emit(out, next) => Emit(out, ignoreAllCommits(next))
+    case s@Halt() => s
+    case s@Error() => s
+    case Mark(next) => Mark(ignoreAllCommits(next))
+    case Reset(next) => Reset(ignoreAllCommits(next))
+    case s@Commit(next, handle) => ignoreAllCommits(next)
   }
 
   //
@@ -203,12 +216,12 @@ trait Parsers {
         markedPipe(p1, next2, PipeRecorder(Nil, Nil, Nil))
       }
       case Reset(next2) => {
-        // replay the recorded input by replacing the left parser with Emit(rec.recordedInput, p1)
-        // pipe the new left parser into the next right parser
-        Emit(rec.recordedInput, p1) |> next2
+        // Replay the recorded input by replacing the left parser with Emit(rec.recordedInput.reverse, p1)
+        // and pipe this parser into the next right parser
+        Emit(rec.recordedInput.reverse, p1) |> ignoreAllCommits(next2)
       }
       case Commit(next2, handle2) => {
-        Emit(rec.recordedOutput, Emit(rec.recordedInput, p1) |> next2)
+        Emit(rec.recordedOutput, Emit(rec.recordedInput, p1) |> ignoreAllCommits(next2))
       }
     }
   }

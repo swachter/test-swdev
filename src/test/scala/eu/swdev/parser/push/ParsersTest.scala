@@ -39,9 +39,15 @@ class ParsersTest extends FunSuite {
 
     val _AorBpipeAorB = ('a' or 'b') |> ('a' or 'b')
 
-    val _AorBpipeABorA = ('a' or 'b') |> (('a' ~ 'b') or 'a')
+    val _AorBpipeABorA = ('a' or 'b').many |> (('a' ~ 'b') or 'a')
+
+    val _ANYpipeABorA = any |> (('a' ~ 'b') or 'a')
+
+    val _ANYpipeABorAandC = any |> ((('a' ~ 'b') or 'a') ~ 'c')
 
     implicit def parser(char: Char): PS = Await(c => if (c == char) Emit(Seq(c), Halt()) else Error(), Error())
+
+    def any: PS = Await((c: Char) => Emit(Seq(c), any), Halt())
 
     def drive[O](ps: ParserState[Char, O], string: String): RunResult[Char, O] = {
       val (rr, log) = run(ps, new RootListRunState[Char, O](string.to[List], Nil), Nil)
@@ -157,12 +163,28 @@ class ParsersTest extends FunSuite {
     assert(drive(_AorBpipeAorB, "x") === Failure(Seq(), Seq()))
   }
 
+  test("{any}|>(ab|a)") {
+    assert(drive(_ANYpipeABorA, "ab") === Success(Seq('a', 'b'), Seq()))
+    assert(drive(_ANYpipeABorA, "a") === Success(Seq('a'), Seq()))
+    assert(drive(_ANYpipeABorA, "abc") === Success(Seq('a', 'b'), Seq('c')))
+    // In the next test case the letter 'c' is consumed by the left side of the parse because it
+    // was tentatively piped into the right side. When the right side resets the pipe then the letters 'a' and 'c'
+    // are stored in an Emit that is piped into the right side again.
+    // The next test case shows that the letter 'c' is available for further matches
+    assert(drive(_ANYpipeABorA, "ac") === Success(Seq('a'), Seq()))
+    assert(drive(_ANYpipeABorA, "c") === Failure(Seq(), Seq()))
+  }
+
+  test("{any}|>(ab|a)c") {
+    assert(drive(_ANYpipeABorAandC, "ac") === Success(Seq('a', 'c'), Seq()))
+  }
+
   test("(a|b)|>(ab|a)") {
     assert(drive(_AorBpipeABorA, "ab") === Success(Seq('a', 'b'), Seq()))
     assert(drive(_AorBpipeABorA, "a") === Success(Seq('a'), Seq()))
     assert(drive(_AorBpipeABorA, "abc") === Success(Seq('a', 'b'), Seq('c')))
     assert(drive(_AorBpipeABorA, "ac") === Success(Seq('a'), Seq('c')))
-    assert(drive(_AorBpipeABorA, "c") === Failure(Seq(), Seq()))
+    assert(drive(_AorBpipeABorA, "b") === Failure(Seq(), Seq())) //
   }
 
   def AorBorC(ps: parsers.PS): Unit = {
