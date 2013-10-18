@@ -1,12 +1,13 @@
 package eu.swdev.parser.push
 
 import org.scalatest.FunSuite
+import java.util.regex.Pattern
 
 /**
   */
 class ParsersTest extends FunSuite {
 
-  val parsers = new Parsers {
+  val parsers = new CharParsers {
 
     type PS = ParserState[Char, Char]
 
@@ -45,7 +46,18 @@ class ParsersTest extends FunSuite {
 
     val _ANYpipeABorAandC = any |> ((('a' ~ 'b') or 'a') ~ 'c')
 
+    val _greedyAs = "a*".p
+
+    val _nonGreedyAs = "a*".q
+
+    val _yesOrNo = "yes|no".p
+
     implicit def parser(char: Char): PS = Await(c => if (c == char) Emit(Seq(c), Halt()) else Error(), Error())
+
+    implicit class StrOps(string: String) {
+      def p: ParserState[Char, String] = regexParser(Pattern.compile(string), true)
+      def q: ParserState[Char, String] = regexParser(Pattern.compile(string), false)
+    }
 
     def any: PS = Await((c: Char) => Emit(Seq(c), any), Halt())
 
@@ -185,6 +197,29 @@ class ParsersTest extends FunSuite {
     assert(drive(_AorBpipeABorA, "abc") === Success(Seq('a', 'b'), Seq('c')))
     assert(drive(_AorBpipeABorA, "ac") === Success(Seq('a'), Seq('c')))
     assert(drive(_AorBpipeABorA, "b") === Failure(Seq(), Seq())) //
+  }
+
+  test("greedy pattern: a*") {
+    assert(drive(_greedyAs, "") === Success(Seq(""), Seq()))
+    assert(drive(_greedyAs, "a") === Success(Seq("a"), Seq()))
+    assert(drive(_greedyAs, "aa") === Success(Seq("aa"), Seq()))
+    assert(drive(_greedyAs, "aab") === Success(Seq("aa"), Seq('b')))
+    assert(drive(_greedyAs, "b") === Success(Seq(""), Seq('b')))
+  }
+
+  test("non-greedy pattern: a*") {
+    assert(drive(_nonGreedyAs, "") === Success(Seq(""), Seq()))
+    assert(drive(_nonGreedyAs, "a") === Success(Seq("a"), Seq()))
+    assert(drive(_nonGreedyAs, "aa") === Success(Seq("a"), Seq('a')))
+    assert(drive(_nonGreedyAs, "aab") === Success(Seq("a"), Seq('a', 'b')))
+    assert(drive(_nonGreedyAs, "b") === Success(Seq(""), Seq('b')))
+  }
+
+  test("pattern: yes|no") {
+    assert(drive(_yesOrNo, "yes") === Success(Seq("yes"), Seq()))
+    assert(drive(_yesOrNo, "no") === Success(Seq("no"), Seq()))
+    assert(drive(_yesOrNo, "yesx") === Success(Seq("yes"), Seq('x')))
+    assert(drive(_yesOrNo, "y") === Failure(Seq(), Seq('y')))
   }
 
   def AorBorC(ps: parsers.PS): Unit = {

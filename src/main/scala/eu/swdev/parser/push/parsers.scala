@@ -1,5 +1,7 @@
 package eu.swdev.parser.push
 
+import java.util.regex.Pattern
+
 trait Parsers {
 
   sealed trait ParserState[-I, +O] { self =>
@@ -51,7 +53,7 @@ trait Parsers {
       }
     }
 
-    def many: ParserState[I, O] = (this ~ many) | Halt()
+    def many: ParserState[I, O] = (this ~ commit ~ many) | Halt()
 
     def oneOrMore: ParserState[I, O] = this ~ many
 
@@ -117,15 +119,30 @@ trait Parsers {
       }
     }
 
+    def collapse: ParserState[I, Seq[O]] = {
+      def doCollapse(p: ParserState[I, O], accu: Seq[O]): ParserState[I, Seq[O]] = {
+        p match {
+          case Await(push, flush) => Await(push andThen (doCollapse(_, accu)), doCollapse(flush, accu))
+          case Emit(out, next) => doCollapse(next, out ++ accu)
+          case s@Halt() => Emit(Seq(accu), Halt())
+          case s@Error() => s
+          case Mark(next) => Mark(doCollapse(next, accu))
+          case Reset(next) => Reset(doCollapse(next, accu))
+          case Commit(next, handle) => Commit(doCollapse(next, accu), handle)
+        }
+      }
+      doCollapse(this, Seq())
+    }
+
   }
 
   case class Await[I, O](push: I => ParserState[I, O], flush: ParserState[I, O]) extends ParserState[I, O]
 
   case class Emit[I, O](out: Seq[O], next: ParserState[I, O]) extends ParserState[I, O]
 
-  case class Halt[I, O]() extends ParserState[Any, Nothing]
+  case class Halt() extends ParserState[Any, Nothing]
 
-  case class Error[I, O]() extends ParserState[Any, Nothing]
+  case class Error() extends ParserState[Any, Nothing]
 
   case class Mark[I, O](next: ParserState[I, O]) extends ParserState[I, O]
 
@@ -226,13 +243,18 @@ trait Parsers {
     }
   }
 
-    //
+  //
   //
   //
 
   def unit[I, O](o: O): ParserState[I, O] = Emit(Seq(o), Halt())
 
-  def commit[I, O]: ParserState[I, O] = Commit(Halt(), true)
+  def filter[I](f: I => Boolean): ParserState[I, I] = (Await(i => if (f(i)) Emit(Seq(i), Halt()) else Halt(), Halt()): ParserState[I, I]).many
+
+  val commit: ParserState[Any, Nothing] = Commit(Halt(), true)
+
+  // a process that skips a number of inputs
+  def skip(cnt: Int): ParserState[Any, Nothing] = if (cnt > 0) Await((i => skip(cnt - 1)), Halt()) else Halt()
 
   //
   //
@@ -316,8 +338,165 @@ trait Parsers {
   //
 
 
+  trait MarkedParsingState[I, O] {
+
+    def push(i: I): ParserState[I, O]
+
+    def flush: ParserState[I, O]
+
+    def await: ParserState[I, O] = Await(i => push(i), flush)
+
+    def finishWithFailure: ParserState[I, O] = Reset(Error())
+
+    def finishWithSuccess(out: Option[O], consumed: Option[Int]): ParserState[I, O] = {
+      val result = out match {
+        case Some(o) => Emit(Seq(o), Halt())
+        case None => Halt()
+      }
+      consumed match {
+        case Some(i) => Reset(skip(i) ~ result)
+        case None => Commit(result, false)
+      }
+    }
+
+  }
+
+  /**
+   * Returns a parser that sets a mark, repeatedly consumes input, and finally
+   * commits or resets the mark.
+   *
+   * @param state Provides the initial parsing state. It is crucial that this is a by-name parameter because each
+   *              instantiation needs a new state
+   * @tparam I
+   * @tparam O
+   * @return
+   */
+  def markedParsing[I, O](state: => MarkedParsingState[I, O]): ParserState[I, O] =
+    Mark(Await(i => state.push(i), state.flush))
+
 }
 
 trait CharParsers extends Parsers {
+
+  /**
+   * Creates a parser for a regular expression.
+   * 
+   * @param pattern
+   * @param greedy indicates if the parser should consume as much input as possible
+   * @return the parser
+   */
+  def regexParser(pattern: Pattern, greedy: Boolean): ParserState[Char, String] = {
+
+    // The regex parser marks its input then awaits characters until the first match is found (in case of a
+    // non-greedy parser), until more input will not match, or until it is flushed.
+    //
+    // When the parser stops by either emitting a found match or by indicating an error it takes care that its
+    // input is correctly positioned. If not all received characters are contained in the output then
+    // the parser resets its input probably skips the number of characters it actually processed. Otherwise the
+    // parser has successfully processed all received characters and it simply commits its input.
+
+    class Scanner {
+
+      val sb = new StringBuilder
+      var foundMatch = if (pattern.matcher("").matches()) Some(0) else None
+
+      def push(c: Char): ParserState[Char, String] = {
+        sb.append(c)
+        val matcher = pattern.matcher(sb)
+        if (matcher.matches()) {
+          foundMatch = Some(sb.length)
+          if (greedy) {
+            Await(c => push(c), flush)
+          } else {
+            flush
+          }
+        } else {
+          // it does not match
+          if (matcher.hitEnd()) {
+            // maybe after some more input it matches
+            if (greedy || foundMatch.isEmpty) {
+              Await(c => push(c), flush)
+            } else {
+              flush
+            }
+          } else {
+            // it will never match with more input
+            flush
+          }
+        }
+      }
+
+      def flush: ParserState[Char, String] = {
+        foundMatch match {
+          case Some(l) => if (l == sb.length) {
+            Commit(Emit(Seq(sb.substring(0, l)), Halt()), false)
+          } else {
+            Reset(skip(l) ~ Emit(Seq(sb.substring(0, l)), Halt()))
+          }
+          case None => Reset(Error())
+        }
+      }
+    }
+    
+    Mark(Await(
+      c => new Scanner().push(c),
+      new Scanner().flush
+    ))
+  }
+
+  def keywordParser(keyword: String): ParserState[Char, Nothing] = {
+    class Scanner {
+      val sb = new StringBuilder
+      def push(c: Char): ParserState[Char, Nothing] = {
+        sb.append(c)
+        if (sb.length == keyword.length) {
+          flush
+        } else {
+          if (keyword.startsWith(sb)) {
+            Await(c => push(c), flush)
+          } else {
+            flush
+          }
+        }
+      }
+      def flush: ParserState[Char, Nothing] = {
+        if (sb.toString().equals(keyword)) {
+          Commit(Halt(), false)
+        } else {
+          Reset(Error())
+        }
+      }
+    }
+    Mark(Await(
+      c => new Scanner().push(c),
+      new Scanner().flush
+    ))
+  }
+
+  def kwParser(keyword: String): ParserState[Char, Nothing] = markedParsing(new MarkedParsingState[Char, Nothing] {
+
+    val sb = new StringBuilder
+
+    def push(i: Char): ParserState[Char, Nothing] = {
+      sb.append(i)
+      if (sb.length == keyword.length) {
+        flush
+      } else {
+        if (keyword.startsWith(sb)) {
+          await
+        } else {
+          flush
+        }
+      }
+    }
+
+    def flush: ParserState[Char, Nothing] = {
+      if (sb.toString().equals(keyword)) {
+        finishWithSuccess(None, None)
+      } else {
+        finishWithFailure
+      }
+    }
+  })
 
 }
