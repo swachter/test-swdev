@@ -256,6 +256,14 @@ trait Parsers {
   // a process that skips a number of inputs
   def skip(cnt: Int): ParserState[Any, Nothing] = if (cnt > 0) Await((i => skip(cnt - 1)), Halt()) else Halt()
 
+  def require[I](input: I): ParserState[I, Nothing] = Await(i => if (i == input) Halt() else Error(), Error())
+
+  def require[I](input: Seq[I]): ParserState[I, Nothing] = if (input.isEmpty) {
+    Halt()
+  } else {
+    Await(i => if (i == input.head) require(input.tail) else Error(), Error())
+  }
+
   //
   //
   //
@@ -380,12 +388,15 @@ trait CharParsers extends Parsers {
 
   /**
    * Creates a parser for a regular expression.
-   * 
+   *
+   * This parser uses only a single mark for its input. The input is adjusted corresponding to the consumed characters
+   * by either committing or reset and skips.
+   *
    * @param pattern
    * @param greedy indicates if the parser should consume as much input as possible
    * @return the parser
    */
-  def regexParser(pattern: Pattern, greedy: Boolean): ParserState[Char, String] = {
+  def optimizedRegexParser(pattern: Pattern, greedy: Boolean): ParserState[Char, String] = markedParsing(new MarkedParsingState[Char, String] {
 
     // The regex parser marks its input then awaits characters until the first match is found (in case of a
     // non-greedy parser), until more input will not match, or until it is flushed.
@@ -395,108 +406,72 @@ trait CharParsers extends Parsers {
     // the parser resets its input probably skips the number of characters it actually processed. Otherwise the
     // parser has successfully processed all received characters and it simply commits its input.
 
-    class Scanner {
-
-      val sb = new StringBuilder
-      var foundMatch = if (pattern.matcher("").matches()) Some(0) else None
-
-      def push(c: Char): ParserState[Char, String] = {
-        sb.append(c)
-        val matcher = pattern.matcher(sb)
-        if (matcher.matches()) {
-          foundMatch = Some(sb.length)
-          if (greedy) {
-            Await(c => push(c), flush)
-          } else {
-            flush
-          }
-        } else {
-          // it does not match
-          if (matcher.hitEnd()) {
-            // maybe after some more input it matches
-            if (greedy || foundMatch.isEmpty) {
-              Await(c => push(c), flush)
-            } else {
-              flush
-            }
-          } else {
-            // it will never match with more input
-            flush
-          }
-        }
-      }
-
-      def flush: ParserState[Char, String] = {
-        foundMatch match {
-          case Some(l) => if (l == sb.length) {
-            Commit(Emit(Seq(sb.substring(0, l)), Halt()), false)
-          } else {
-            Reset(skip(l) ~ Emit(Seq(sb.substring(0, l)), Halt()))
-          }
-          case None => Reset(Error())
-        }
-      }
-    }
-    
-    Mark(Await(
-      c => new Scanner().push(c),
-      new Scanner().flush
-    ))
-  }
-
-  def keywordParser(keyword: String): ParserState[Char, Nothing] = {
-    class Scanner {
-      val sb = new StringBuilder
-      def push(c: Char): ParserState[Char, Nothing] = {
-        sb.append(c)
-        if (sb.length == keyword.length) {
-          flush
-        } else {
-          if (keyword.startsWith(sb)) {
-            Await(c => push(c), flush)
-          } else {
-            flush
-          }
-        }
-      }
-      def flush: ParserState[Char, Nothing] = {
-        if (sb.toString().equals(keyword)) {
-          Commit(Halt(), false)
-        } else {
-          Reset(Error())
-        }
-      }
-    }
-    Mark(Await(
-      c => new Scanner().push(c),
-      new Scanner().flush
-    ))
-  }
-
-  def kwParser(keyword: String): ParserState[Char, Nothing] = markedParsing(new MarkedParsingState[Char, Nothing] {
 
     val sb = new StringBuilder
+    var foundMatch = if (pattern.matcher("").matches()) Some(0) else None
 
-    def push(i: Char): ParserState[Char, Nothing] = {
-      sb.append(i)
-      if (sb.length == keyword.length) {
-        flush
-      } else {
-        if (keyword.startsWith(sb)) {
+    def push(c: Char): ParserState[Char, String] = {
+      sb.append(c)
+      val matcher = pattern.matcher(sb)
+      if (matcher.matches()) {
+        foundMatch = Some(sb.length)
+        if (greedy) {
           await
         } else {
           flush
         }
+      } else {
+        // it does not match
+        if (matcher.hitEnd()) {
+          // maybe after some more input it matches
+          if (greedy || foundMatch.isEmpty) {
+            await
+          } else {
+            flush
+          }
+        } else {
+          // it will never match with more input
+          flush
+        }
       }
     }
 
-    def flush: ParserState[Char, Nothing] = {
-      if (sb.toString().equals(keyword)) {
-        finishWithSuccess(None, None)
-      } else {
-        finishWithFailure
+    def flush: ParserState[Char, String] = {
+      foundMatch match {
+        case s@Some(l) => finishWithSuccess(Some(sb.substring(0, l)), if (l == sb.length) None else s)
+        case None => finishWithFailure
       }
     }
   })
+
+  /**
+   * Simple RegEx parser that uses the choice parser for backtracking.
+   *
+   * @param pattern
+   * @param greedy
+   * @return
+   */
+  def regexParser(pattern: Pattern, greedy: Boolean): ParserState[Char, String] = {
+    def step(sb: String): ParserState[Char, String] = {
+      val matcher = pattern.matcher(sb.mkString)
+      if (matcher.matches()) {
+        val emit = Emit(Seq(sb), Halt())
+        if (sb.isEmpty || greedy) {
+          // maybe there is a longer match -> try it using first alternative of choice.
+          // if there is no longer match then emit the found match (second alternative of choice
+          Await((c: Char) => step(sb + c), emit) | emit
+        } else {
+          emit
+        }
+      } else {
+        if (matcher.hitEnd()) {
+          Await((c: Char) => step(sb + c), Error()) | Error()
+        } else {
+          Error()
+        }
+      }
+    }
+    step("")
+  }
 
 }

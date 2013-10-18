@@ -1,6 +1,7 @@
 package eu.swdev.xml.token
 
 import eu.swdev.parser.push.CharParsers
+import java.util.regex.Pattern
 
 /**
  */
@@ -10,8 +11,10 @@ class Lexer {
 
     type Parser[O] = ParserState[Char, O]
 
-    implicit def charParser(char: Char): Parser[Nothing] = Await(c => Halt(), Error())
-    implicit def stringParser(str: String): Parser[Nothing] = keywordParser(str)
+    implicit def charParser(char: Char): ParserState[Char, Nothing] = require(char)
+
+    implicit def stringParser(str: String): ParserState[Char, Nothing] = require(str.toList)
+
     // 1
     lazy val _document = _prolog ~ _element ~ _misc.many
 
@@ -31,16 +34,14 @@ class Lexer {
     lazy val _Name = (_NameStartChar ~ _NameChar.many).collapse.map(_.foldRight(new StringBuilder)((c, b) => b.append(c)).toString())
 
     // 10
-    lazy val _AttValue: Parser[Token] = ('"' ~ (new AttrCharsPushParser('"') | _Reference ).many ~ '"') | ('\'' ~ (new AttrCharsPushParser('\'') | _Reference ).many ~ '\'')
-
-    def attrChars(quote: Char): Parser[Token] = Await()
+    lazy val _AttValue: ParserState[Char, Token] = ('"' ~ (attrChars('"') | _Reference ).many ~ '"') | ('\'' ~ (attrChars('\'') | _Reference ).many ~ '\'')
 
     // 14 (requires at least one character (the XML spec allows no characters)
-    lazy val _CharData = (new CharDataPushParser).map(CharData(_))
+    lazy val _CharData = charData.map(CharData(_))
 
     // 22
     lazy val _prolog: Parser[Token] = _XmlDecl.optional
-    
+
     // 23
     lazy val _XmlDecl = "<?xml" ~ (_VersionInfo >>= ((vi: String) => (_EncodingDecl.option >>= ((ed: Option[String]) => (_SDDecl.option >>= ((sd: Option[String]) => unit(XmlDecl(vi, ed, sd)))))))) ~ _S.optional ~ "?>"
 
@@ -48,13 +49,13 @@ class Lexer {
     lazy val _VersionInfo = _S ~ "version" ~ _Eq ~ quotes(_VersionNum)
 
     // 25
-    lazy val _Eq = _S.optional ~ "=" ~ _S.optional
+    lazy val _Eq = _S.optional ~ '=' ~ _S.optional
 
     // 26
     lazy val _VersionNum = "1\\.[0-9]+".p
 
     // 27
-    lazy val _misc: Parser[Token] = EmptyPushParser
+    lazy val _misc: Parser[Token] = Halt()
 
     // 32
     lazy val _SDDecl = _S ~ "standalone" ~ _Eq ~ quotes("yes|no".p)
@@ -81,7 +82,7 @@ class Lexer {
     lazy val _CharRef: Parser[Token] = "&#" ~ ( ( 'x' ~ "[0-9a-fA-f]+".p ).map((s: String) => CharRef(s, true)) | ( "[0-9]+".p ~ ';' ).map((s: String) => CharRef(s, false)) ) ~ ';'
 
     // 67
-    lazy val _Reference: Parser[Token] = _EntityRef.attempt | _CharRef
+    lazy val _Reference: Parser[Token] = _CharRef | _EntityRef
 
     // 68
     lazy val _EntityRef: Parser[Token] = '&' ~ _Name.map(EntityRef(_)) ~ ';'
@@ -94,81 +95,28 @@ class Lexer {
 
     def quotes[O](p: Parser[O]): Parser[O] = ("'" ~ p ~ "'") | (("\"" ~ p ~ "\""))
 
-    def checkChar(check: Char => Boolean): Parser[Char] = new Parser[Char] {
-      def push(i: Char): PushResult[Char] = if (check(i)) Return(true, Seq(i), Nil) else FailedPush(true)
-      def flush(): FlushResult[Char] = FailedFlush(true)
-    }
+    def checkChar(check: Char => Boolean): Parser[Char] = Await(i => if (check(i)) Emit(Seq(i), Halt()) else Error(), Error())
 
     //
     //
     //
-    
-    implicit def pushParser(string: String): Parser[Nothing] = new IgnorePushParser(string, false)((c, d) => c == d)
-
-    implicit def pushParser(char: Char): Parser[Nothing] = new Parser[Nothing] {
-      def push(i: Char): PushResult[Nothing] = if (i == char) Return(true, Nil, Nil) else FailedPush(false)
-      def flush(): FlushResult[Nothing] = FailedFlush(false)
-    }
 
     implicit class StrOps(string: String) {
-      def p: Parser[String] = new PatternPushParser(string, true)
+      def p: Parser[String] = regexParser(Pattern.compile(string), true)
     }
 
     //
     //
     //
 
-    // requires at least one character
-    class CharDataPushParser extends Parser[String] {
-      private def check(char: Char) = char != '<' && char != '&'
-      def push(i: Char): PushResult[String] = if (check(i)) Continue(true, Seq(), new Recorder(new StringBuilder(i))) else FailedPush(false)
-      def flush(): FlushResult[String] = FailedFlush(false)
-      class Recorder(sb: StringBuilder) extends Parser[String] {
-        var state = 0
-        def push(i: Char): PushResult[String] = if (check(i)) {
-          sb.append(i)
-          state match {
-            case 0 => {
-              if (i == ']') state = 1
-              Continue(true, Seq(), this)
-            }
-            case 1 => {
-              if (i == ']') state = 2 else state = 0
-              Continue(true, Seq(), this)
-            }
-            case 2 => {
-              if (i == '>') {
-                FailedPush(true) // the sequence "]]>" is forbidden inside CharData
-              } else {
-                if (i != ']') state = 0
-                Continue(true, Seq(), this)
-              }
-            }
-          }
-        } else {
-          Return(true, Seq(sb.toString()), i :: Nil)
-        }
-        def flush(): FlushResult[String] = Flushed(true, Seq(sb.toString()), Nil)
-      }
+    def charData: Parser[String] = {
+      val charParser: Parser[Char] = Await(char => if (char != '<' && char != '&') Emit(Seq(char), Halt()) else Error(), Error())
+      charParser.oneOrMore.collapse.map(seq => seq.foldLeft(new StringBuilder)((b, c) => b.append(c)).toString())
     }
 
-    def attrChars(quote: Char) {
-
-    }
-    // requires at least one char
-    class AttrCharsPushParser(quote: Char) extends Parser[Token] {
-      private def check(char: Char) = char != '<' && char != '&' && char != quote
-      def push(i: Char): PushResult[Token] = if (check(i)) Continue(true, Seq(), new Recorder(new StringBuilder().append(i))) else FailedPush(false)
-      def flush(): FlushResult[Token] = FailedFlush(false)
-      class Recorder(sb: StringBuilder) extends Parser[Token] {
-        def push(i: Char): PushResult[Token] = if (check(i)) {
-          sb.append(i)
-          Continue(true, Seq(), this)
-        } else {
-          Return(true, Seq(AttrChars(sb.toString())), i :: Nil)
-        }
-        def flush(): FlushResult[Token] = Flushed(true, Seq(AttrChars(sb.toString())), Nil)
-      }
+    def attrChars(quote: Char): Parser[Token] = {
+      val attrChar: Parser[Char] = Await(char => if (char != '<' && char != '&' && char != quote) Emit(Seq(char), Halt()) else Error(), Error())
+      attrChar.oneOrMore.collapse.map(seq => AttrChars(seq.foldLeft(new StringBuilder)((b, c) => b.append(c)).toString()))
     }
 
   }
@@ -189,7 +137,7 @@ class Lexer {
   case class EntityRef(code: String) extends Token
 
   private def isWhitespace(char: Char) = char == ' ' || char == '\n' || char == '\t' || char == '\r'
-  
+
   private def isChar(char: Char) = char >= '\u0020' && char <= '\ud7ff' || char == '\u0009' || char == '\u000a' || char == '\u000d' || char >= '\ue000' && char <= '\ufffd'
 
   private def isNameStartChar(char: Char) =
@@ -219,6 +167,5 @@ class Lexer {
     char >= '\u203f' && char <= '\u2040'
 
   private def notLtOrAmp(char: Char): Boolean = char != '<' && char != '&'
-
 
 }
