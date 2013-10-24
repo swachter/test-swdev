@@ -445,7 +445,7 @@ trait CharParsers extends Parsers {
   })
 
   /**
-   * Simple RegEx parser that uses the choice parser for backtracking.
+   * Simple RegEx parser that uses the choice combinator for backtracking.
    *
    * @param pattern
    * @param greedy
@@ -457,7 +457,7 @@ trait CharParsers extends Parsers {
       if (matcher.matches()) {
         val emit = Emit(Seq(sb), Halt())
         if (sb.isEmpty || greedy) {
-          // maybe there is a longer match -> try it using first alternative of choice.
+          // maybe there is a longer match -> try it using the first alternative of the choice.
           // if there is no longer match then emit the found match (second alternative of choice
           Await((c: Char) => step(sb + c), emit) | emit
         } else {
@@ -465,6 +465,7 @@ trait CharParsers extends Parsers {
         }
       } else {
         if (matcher.hitEnd()) {
+          // maybe there is a longer match
           Await((c: Char) => step(sb + c), Error()) | Error()
         } else {
           Error()

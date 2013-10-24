@@ -1,19 +1,19 @@
 package eu.swdev.xml.token
 
-import eu.swdev.parser.push.CharParsers
+import eu.swdev.parser.push.CharPParsers
 import java.util.regex.Pattern
 
 /**
  */
-class Lexer {
+class PLexer {
 
-  val XmlPushParsers = new CharParsers {
+  val XmlPushParsers = new CharPParsers {
 
-    type Parser[O] = ParserState[Char, O]
+    type CharParser[O] = Parser[Char, O]
 
-    implicit def charParser(char: Char): ParserState[Char, Nothing] = require(char)
+    implicit def charParser(char: Char): Parser[Char, Nothing] = require(char)
 
-    implicit def stringParser(str: String): ParserState[Char, Nothing] = require(str.toList)
+    implicit def stringParser(str: String): Parser[Char, Nothing] = require(str.toList)
 
     // 1
     lazy val _document = _prolog ~ _element ~ _misc.many
@@ -22,7 +22,7 @@ class Lexer {
     lazy val _Char = checkChar(isChar)
 
     // 3
-    lazy val _S: Parser[Nothing] = (Await(c => if (isWhitespace(c)) Halt() else Error(), Error()): Parser[Nothing]).oneOrMore
+    lazy val _S: CharParser[Nothing] = (Await(c => if (isWhitespace(c)) Halt() else Error(), Error()): CharParser[Nothing]).oneOrMore
 
     // 4
     lazy val _NameStartChar = checkChar(isNameStartChar)
@@ -34,13 +34,13 @@ class Lexer {
     lazy val _Name = (_NameStartChar ~ _NameChar.many).collapse.map(_.foldRight(new StringBuilder)((c, b) => b.append(c)).toString())
 
     // 10
-    lazy val _AttValue: ParserState[Char, Token] = ('"' ~ (attrChars('"') | _Reference ).many ~ '"') | ('\'' ~ (attrChars('\'') | _Reference ).many ~ '\'')
+    lazy val _AttValue: CharParser[Token] = ('"' ~ (attrChars('"') | _Reference ).many ~ '"') | ('\'' ~ (attrChars('\'') | _Reference ).many ~ '\'')
 
     // 14 (requires at least one character (the XML spec allows no characters)
     lazy val _CharData = charData.map(CharData(_))
 
     // 22
-    lazy val _prolog: Parser[Token] = _XmlDecl.optional
+    lazy val _prolog: CharParser[Token] = _XmlDecl.optional
 
     // 23
     lazy val _XmlDecl = "<?xml" ~ (_VersionInfo >>= ((vi: String) => (_EncodingDecl.option >>= ((ed: Option[String]) => (_SDDecl.option >>= ((sd: Option[String]) => unit(XmlDecl(vi, ed, sd)))))))) ~ _S.optional ~ "?>"
@@ -55,37 +55,37 @@ class Lexer {
     lazy val _VersionNum = "1\\.[0-9]+".p
 
     // 27
-    lazy val _misc: Parser[Token] = Halt()
+    lazy val _misc: CharParser[Token] = Halt()
 
     // 32
     lazy val _SDDecl = _S ~ "standalone" ~ _Eq ~ quotes("yes|no".p)
 
     // 39
-    lazy val _element: Parser[Token] = '<' ~ _Name.map(BeginSTag(_)) ~ (_S ~ _Attribute).many ~ _S.optional ~ ("/>" ~ unit(EndSTagEmpty) | '>' ~ unit(EndSTag) ~ _content ~ _ETag.map(ETag(_)) )
+    lazy val _element: CharParser[Token] = '<' ~ _Name.map(BeginSTag(_)) ~ (_S ~ _Attribute).many ~ _S.optional ~ ("/>" ~ unit(EndSTagEmpty) | '>' ~ unit(EndSTag) ~ _content ~ _ETag.map(ETag(_)) )
 
     // 40
     //lazy val _STag = "<" ~ _Name ~ (_S ~ _Attribute).many ~ _S.optional ~ '>'
 
     // 41
-    lazy val _Attribute: Parser[Token] = _Name.map(AttrName(_)) ~ _Eq ~ _AttValue
+    lazy val _Attribute: CharParser[Token] = _Name.map(AttrName(_)) ~ _Eq ~ _AttValue
 
     // 42
     lazy val _ETag = "</" ~ _Name ~ _S.optional ~ '>'
 
     // 43
-    lazy val _content: Parser[Token] = _CharData.optional ~ (( _element | _Reference ) ~ _CharData.optional).many
+    lazy val _content: CharParser[Token] = _CharData.optional ~ (( _element | _Reference ) ~ _CharData.optional).many
 
     // 44
     //lazy val _EmptyElemTag = '<' ~ _Name ~ (_S ~ _Attribute).many ~ _S.optional ~ "/>"
 
     // 66
-    lazy val _CharRef: Parser[Token] = "&#" ~ ( ( 'x' ~ "[0-9a-fA-f]+".p ).map((s: String) => CharRef(s, true)) | ( "[0-9]+".p ~ ';' ).map((s: String) => CharRef(s, false)) ) ~ ';'
+    lazy val _CharRef: CharParser[Token] = "&#" ~ ( ( 'x' ~ "[0-9a-fA-f]+".p ).map((s: String) => CharRef(s, true)) | ( "[0-9]+".p ~ ';' ).map((s: String) => CharRef(s, false)) ) ~ ';'
 
     // 67
-    lazy val _Reference: Parser[Token] = _CharRef | _EntityRef
+    lazy val _Reference: CharParser[Token] = _CharRef | _EntityRef
 
     // 68
-    lazy val _EntityRef: Parser[Token] = '&' ~ _Name.map(EntityRef(_)) ~ ';'
+    lazy val _EntityRef: CharParser[Token] = '&' ~ _Name.map(EntityRef(_)) ~ ';'
 
     // 80
     lazy val _EncodingDecl = _S ~ "encoding" ~ _Eq ~ quotes(_EncName)
@@ -93,36 +93,30 @@ class Lexer {
     // 81
     lazy val _EncName = "[A-Za-z]([A-Za-z0-9,_]|-)*".p
 
-    def quotes[O](p: Parser[O]): Parser[O] = ("'" ~ p ~ "'") | (("\"" ~ p ~ "\""))
+    def quotes[O](p: CharParser[O]): CharParser[O] = ("'" ~ p ~ "'") | (("\"" ~ p ~ "\""))
 
-    def checkChar(check: Char => Boolean): Parser[Char] = Await(i => if (check(i)) Emit(Seq(i), Halt()) else Error(), Error())
+    def checkChar(check: Char => Boolean): CharParser[Char] = Await(i => if (check(i)) Emit(Seq(i), Halt()) else Error(), Error())
 
     //
     //
     //
 
     implicit class StrOps(string: String) {
-      def p: Parser[String] = regexParser(Pattern.compile(string), true)
+      def p: CharParser[String] = regexParser(Pattern.compile(string), true)
     }
 
     //
     //
     //
 
-    def charData: Parser[String] = {
-      val charParser: Parser[Char] = Await(char => if (char != '<' && char != '&') Emit(Seq(char), Halt()) else Error(), Error())
+    def charData: CharParser[String] = {
+      val charParser: CharParser[Char] = Await(char => if (char != '<' && char != '&') Emit(Seq(char), Halt()) else Error(), Error())
       charParser.oneOrMore.collapse.map(seq => seq.foldLeft(new StringBuilder)((b, c) => b.append(c)).toString())
     }
 
-    def attrChars(quote: Char): Parser[Token] = {
-      val attrChar: Parser[Char] = Await(char => if (char != '<' && char != '&' && char != quote) Emit(Seq(char), Halt()) else Error(), Error())
+    def attrChars(quote: Char): CharParser[Token] = {
+      val attrChar: CharParser[Char] = Await(char => if (char != '<' && char != '&' && char != quote) Emit(Seq(char), Halt()) else Error(), Error())
       attrChar.oneOrMore.collapse.map(seq => AttrChars(seq.foldLeft(new StringBuilder)((b, c) => b.append(c)).toString()))
-    }
-
-    def drive[O](ps: ParserState[Char, O], string: String): RunResult[Char, O] = {
-      val (rr, log) = run(ps, new RootListRunState[Char, O](string.to[List], Nil), Nil)
-      println(log)
-      rr
     }
 
   }
