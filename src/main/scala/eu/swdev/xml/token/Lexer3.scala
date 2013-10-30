@@ -93,7 +93,7 @@ class Lexer3 {
     // 81
     lazy val _EncName = "[A-Za-z]([A-Za-z0-9,_]|-)*".p
 
-    def quotes[O](p: CharParser[O]): CharParser[O] = ("'" ~ p ~ "'") | (("\"" ~ p ~ "\""))
+    def quotes[O](p: CharParser[O]): CharParser[O] = attempt(("'" ~ p ~ "'") | (("\"" ~ p ~ "\"")))
 
     def checkChar(check: Char => Boolean): CharParser[Char] = Await(i => if (check(i)) Emit(Seq(i), Halt()) else Error("checkChar1"), Error("checkChar2"))
 
@@ -116,7 +116,7 @@ class Lexer3 {
 
     def attrChars(quote: Char): CharParser[Token] = {
       val attrChar: CharParser[Char] = Await(char => if (char != '<' && char != '&' && char != quote) Emit(Seq(char), Halt()) else Error("attrChars1"), Error("attrChars2"))
-      attrChar.oneOrMore.collapse.map(seq => AttrChars(seq.foldLeft(new StringBuilder)((b, c) => b.append(c)).toString()))
+      attrChar.oneOrMore.collapse.map(seq => AttrChars(seq.foldRight(new StringBuilder)((c, b) => b.append(c)).toString()))
     }
 
   }

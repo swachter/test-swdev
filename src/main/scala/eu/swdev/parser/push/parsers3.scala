@@ -4,6 +4,8 @@ import scala.annotation.tailrec
 
 trait Parsers3 {
 
+  implicit def getParser[I, O](f: () => Parser[I, O]): Parser[I, O] = f()
+
   sealed trait Parser[I, +O] { //self =>
 
     def ~[O1 >: O](p2: => Parser[I, O1]): Parser[I, O1] = this and p2
@@ -20,7 +22,6 @@ trait Parsers3 {
 
     def or[O1 >: O](p2: => Parser[I, O1]): Parser[I, O1] = {
       def tryFirst(first: Parser[I, O], input: Seq[I]): Parser[I, O1] = {
-        println("tryFirst - first: " + first + "; input: " + input)
         first match {
           case Await(push, flush) => {
             // await a character
@@ -37,11 +38,9 @@ trait Parsers3 {
           }
           case s@Error(_) => {
             // restore the recorded input and continue with the second alternative
-            println("error - input: " + input + "; p2: " + p2)
-            Restore(input, p2)
+            Restore(input.reverse, p2)
           }
           case Restore(inp, next) => {
-            println("restore - input: " + input + "; inp: " + inp)
             Restore(inp, tryFirst(next, input.drop(inp.length)))
           }
         }
@@ -142,7 +141,16 @@ trait Parsers3 {
 
   }
 
-  case class Await[I, O](push: I => Parser[I, O], flush: Parser[I, O]) extends Parser[I, O]
+  class Await[I, O](val push: I => Parser[I, O], flushParam: => Parser[I, O]) extends Parser[I, O] {
+    lazy val flush: Parser[I, O] = flushParam
+  }
+
+  object Await {
+    def apply[I, O](push: I => Parser[I, O], flush: => Parser[I, O]) = {
+      new Await(push, flush)
+    }
+    def unapply[I, O](await: Await[I, O]): Option[(I => Parser[I, O], () => Parser[I, O])] = Some((await.push, () => await.flush))
+  }
 
   case class Emit[I, O](out: Seq[O], next: Parser[I, O]) extends Parser[I, O]
 
@@ -215,7 +223,7 @@ trait Parsers3 {
   }
 
   class RunStateImpl[I, O](val unconsumed: Seq[I], val result: Seq[O]) extends RunState[I, O] {
-    def restore(input: Seq[I]):RunState[I, O] = new RunStateImpl(input.reverse ++ unconsumed, result)
+    def restore(input: Seq[I]):RunState[I, O] = new RunStateImpl(input ++ unconsumed, result)
     def next: RunState[I, O] = new RunStateImpl(unconsumed.tail, result)
     def input: Option[I] = unconsumed.headOption
     def output(o: Seq[O]): RunState[I, O] = new RunStateImpl(unconsumed, o ++ result)

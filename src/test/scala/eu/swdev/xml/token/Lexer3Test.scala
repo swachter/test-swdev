@@ -30,8 +30,8 @@ class Lexer3Test extends FunSuite {
     assert(drive[Nothing](_S ~ "version" ~_Eq, " version=") === Success(Nil, Nil))
     assert(drive[String](_VersionInfo, " version=\"1.0\"") === Success(Seq("1.0"), Nil))
     assert(drive[String](_VersionInfo, " version=\"1.0\" ") === Success(Seq("1.0"), Seq(' ')))
-//    assert(drive[String](_VersionInfo >>= (vi => unit(vi)), " version=\"1.0\"") === Success(Seq("1.0"), Seq()))
-//    assert(drive[String](_VersionInfo >>= (vi => unit(vi)), " version=\"1.0\" ") === Success(Seq("1.0"), Seq(' ')))
+    assert(drive[String](_VersionInfo >>= (vi => unit(vi)), " version=\"1.0\"") === Success(Seq("1.0"), Seq()))
+    assert(drive[String](_VersionInfo >>= (vi => unit(vi)), " version=\"1.0\" ") === Success(Seq("1.0"), Seq(' ')))
   }
 
   test("encodingDecl") {
@@ -64,13 +64,13 @@ class Lexer3Test extends FunSuite {
     assert(drive[Token](_EntityRef, "&apos;") === Success(Seq(EntityRef("apos")), Nil))
     assert(drive[Token](_Reference, "&apos;") === Success(Seq(EntityRef("apos")), Nil))
     assert(drive[Token](_AttValue, "'&apos;'") === Success(Seq(EntityRef("apos")), Nil))
-    assert(drive[Token](_Attribute, "a='abc'") === Success(Seq(AttrChars("abc"), AttrName("a")), Seq()))
-    assert(drive[Token](_Attribute, "a='abc&#xa;&apos;xyz'") === Success(Seq(AttrChars("xyz"), EntityRef("apos"), CharRef("a", true), AttrChars("abc"), AttrName("a")), Seq()))
+    assert(drive[Token](_Attribute, "a='abc'") === Success(Seq(AttrName("a"), AttrChars("abc")), Seq()))
+    assert(drive[Token](_Attribute, "a='abc&#xa;&apos;xyz'") === Success(Seq(AttrName("a"), AttrChars("abc"), CharRef("a", true), EntityRef("apos"), AttrChars("xyz")), Seq()))
   }
 
   test("Element") {
-    assert(drive[Token](_element, "<x:e a='5' xmlns:x='x'/>") === Success(Seq(EndSTagEmpty, AttrChars("x"), AttrName("xmlns:x"), AttrChars("5"), AttrName("a"), BeginSTag("x:e")), Nil))
-    assert(drive[Token](_element, "<x:e></x:e>") === Success(Seq(ETag("x:e"), EndSTag, BeginSTag("x:e")), Nil))
+    assert(drive[Token](_element, "<x:e a='5' xmlns:x='x'/>") === Success(Seq(BeginSTag("x:e"), AttrName("a"), AttrChars("5"), AttrName("xmlns:x"), AttrChars("x"), EndSTagEmpty), Nil))
+    assert(drive[Token](_element, "<x:e></x:e>") === Success(Seq(BeginSTag("x:e"), EndSTag, ETag("x:e")), Nil))
   }
 
 }
