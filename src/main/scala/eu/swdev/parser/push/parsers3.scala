@@ -28,6 +28,20 @@ trait Parsers3 {
 
     def |[O1 >: O](p2: => Parser[I, O1]): Parser[I, O1] = this or p2
 
+    /**
+     * A parser that first tries this parser and in case of failure tries the specified alternative parser.
+     *
+     * The "or" parser records its input until the first parser reaches an Emit state. In this case the "or" parser
+     * forwards the Emit and commits to the first alternative. In other words no more backtracking is possible after
+     * the first parser has emitted some output.
+     *
+     * If a parser does not generate Emits for some longer input and backtracking is no more required then an explicit
+     * commit (an Emit with an empty output sequence) can be interspersed.
+     *
+     * @param p2
+     * @tparam O1
+     * @return
+     */
     def or[O1 >: O](p2: => Parser[I, O1]): Parser[I, O1] = {
       def tryFirst(first: Parser[I, O], input: Seq[I]): Parser[I, O1] = {
         first match {
@@ -56,6 +70,16 @@ trait Parsers3 {
       tryFirst(this, Seq())
     }
 
+    /**
+     * An "or" parser that attempts this parser and in case of failure tries the specified alternative parser.
+     *
+     * If a parser is attempted then its output is delayed until the parser has reached its Halt() state. By attempting
+     * this parser backtracking is enabled even if this parser would emit some output before it halts.
+     *
+     * @param p2
+     * @tparam O1
+     * @return
+     */
     def |||[O1 >: O](p2: => Parser[I, O1]): Parser[I, O1] = this.attempt | p2
 
     /**
@@ -196,6 +220,18 @@ trait Parsers3 {
   }
 
   def attempt[I, O](p: Parser[I, O]): Parser[I, O] = p attemptAndThen Halt()
+
+  /**
+   * A parser that emits an empty sequence and then halts.
+   *
+   * If an "or" parser receives and emit while trying its first alternative then it commits to the first alternative.
+   * Therefore this parser is called a commit parser.
+   *
+   * @tparam I
+   * @tparam O
+   * @return
+   */
+  def commit[I, O]: Parser[I, O] = Emit(Seq(), Halt())
 
   //
   //
