@@ -66,7 +66,7 @@ class Parsers3Test extends FunSuite {
 
     val _yesOrNo = "yes|no".p
 
-    implicit def parser(char: Char): PS = Await(c => if (c == char) Emit(Seq(c), Halt()) else Error("char1"), Error("char2"))
+    implicit def parser(char: Char): PS = Await(c => if (c == char) Emit(Seq(c), Halt()) else Error(), Error())
 
     implicit class StrOps(string: String) {
       def p: Parser[Char, String] = regexParser(Pattern.compile(string), true)
@@ -76,9 +76,8 @@ class Parsers3Test extends FunSuite {
     def any: PS = Await((c: Char) => Emit(Seq(c), any), Halt())
 
     def drive[O](ps: Parser[Char, O], string: String): RunResult[Char, O] = {
-      val (rr, log, id) = run(ps, new RunStateImpl[Char, O](string.to[List], Nil), Nil)
+      val (rr, log) = run(ps, new RunStateImpl[Char, O](string.to[List], Nil), Nil)
       println(log)
-      println(id)
       rr
     }
   }

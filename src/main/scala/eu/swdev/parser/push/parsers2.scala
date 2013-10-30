@@ -53,6 +53,22 @@ trait Parsers2 {
       }
     }
 
+    def attempt: ParserState[I, O] = {
+      def doAttempt(q: ParserState[I, O], accu: Seq[O]): ParserState[I, O] = q match {
+        case Await(push, flush) => Await(push andThen (doAttempt(_, accu)), doAttempt(flush, accu))
+        case Emit(out, next) => doAttempt(next, out ++ accu)
+        case Halt() => Emit(accu, Halt())
+        case s@Error() => Error()
+        case Mark(next) => Mark(doAttempt(next, accu))
+        case Reset(next) => Reset(doAttempt(next, accu))
+        case Commit(next, handle) => Commit(doAttempt(next, accu), handle)
+
+      }
+      doAttempt(this, Seq())
+    }
+
+
+
     def many: ParserState[I, O] = (this ~ commit ~ many) | Halt()
 
     def oneOrMore: ParserState[I, O] = this ~ many
@@ -138,7 +154,7 @@ trait Parsers2 {
 
   case class Await[I, O](push: I => ParserState[I, O], flush: ParserState[I, O]) extends ParserState[I, O]
 
-  case class Emit[I, O](out: Seq[O], next: ParserState[I, O]) extends ParserState[I, O]
+  case class Emit[-I, O](out: Seq[O], next: ParserState[I, O]) extends ParserState[I, O]
 
   case class Halt() extends ParserState[Any, Nothing]
 

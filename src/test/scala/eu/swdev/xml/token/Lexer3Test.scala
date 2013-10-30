@@ -12,9 +12,8 @@ class Lexer3Test extends FunSuite {
   import XmlPushParsers._
 
   def drive[O](ps: CharParser[O], string: String): RunResult[Char, O] = {
-    val (rr, log, id) = lexer.XmlPushParsers.run(ps, new RunStateImpl[Char, O](string.to[List], Nil), Nil)
+    val (rr, log) = lexer.XmlPushParsers.run(ps, new RunStateImpl[Char, O](string.to[List], Nil), Nil)
     println(log)
-    println(id)
     rr
   }
 

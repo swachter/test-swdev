@@ -22,7 +22,7 @@ class Lexer3 {
     lazy val _Char = checkChar(isChar)
 
     // 3
-    lazy val _S: CharParser[Nothing] = (Await(c => if (isWhitespace(c)) Halt() else Error("_S1"), Error("_S2")): CharParser[Nothing]).oneOrMore
+    lazy val _S: CharParser[Nothing] = (Await(c => if (isWhitespace(c)) Halt() else Error(), Error()): CharParser[Nothing]).oneOrMore
 
     // 4
     lazy val _NameStartChar = checkChar(isNameStartChar)
@@ -95,7 +95,7 @@ class Lexer3 {
 
     def quotes[O](p: CharParser[O]): CharParser[O] = attempt(("'" ~ p ~ "'") | (("\"" ~ p ~ "\"")))
 
-    def checkChar(check: Char => Boolean): CharParser[Char] = Await(i => if (check(i)) Emit(Seq(i), Halt()) else Error("checkChar1"), Error("checkChar2"))
+    def checkChar(check: Char => Boolean): CharParser[Char] = Await(i => if (check(i)) Emit(Seq(i), Halt()) else Error(), Error())
 
     //
     //
@@ -110,12 +110,12 @@ class Lexer3 {
     //
 
     def charData: CharParser[String] = {
-      val charParser: CharParser[Char] = Await(char => if (char != '<' && char != '&') Emit(Seq(char), Halt()) else Error("charData1"), Error("charData2"))
+      val charParser: CharParser[Char] = Await(char => if (char != '<' && char != '&') Emit(Seq(char), Halt()) else Error(), Error())
       charParser.oneOrMore.collapse.map(seq => seq.foldLeft(new StringBuilder)((b, c) => b.append(c)).toString())
     }
 
     def attrChars(quote: Char): CharParser[Token] = {
-      val attrChar: CharParser[Char] = Await(char => if (char != '<' && char != '&' && char != quote) Emit(Seq(char), Halt()) else Error("attrChars1"), Error("attrChars2"))
+      val attrChar: CharParser[Char] = Await(char => if (char != '<' && char != '&' && char != quote) Emit(Seq(char), Halt()) else Error(), Error())
       attrChar.oneOrMore.collapse.map(seq => AttrChars(seq.foldRight(new StringBuilder)((c, b) => b.append(c)).toString()))
     }
 
