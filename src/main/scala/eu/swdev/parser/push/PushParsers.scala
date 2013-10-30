@@ -1,4 +1,4 @@
-package main.scala.eu.swdev.parser.push
+package eu.swdev.parser.push
 
 import scala.annotation.tailrec
 import java.util.regex.Pattern

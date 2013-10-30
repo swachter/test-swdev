@@ -1,6 +1,5 @@
 package eu.swdev.xml.token
 
-import main.scala.eu.swdev.xml.token.Tokenizer
 import org.scalatest.FunSuite
 
 /**

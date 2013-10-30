@@ -2,7 +2,7 @@ package eu.swdev.parser.push
 
 import java.util.regex.Pattern
 
-trait Parsers {
+trait Parsers2 {
 
   sealed trait ParserState[-I, +O] { self =>
 
@@ -62,8 +62,8 @@ trait Parsers {
     def flatMap[I1 <: I, T](f: O => ParserState[I1, T]): ParserState[I1, T] = this match {
       case Await(push, flush) => Await(push andThen (_ >>= f), flush >>= f)
       case Emit(out, next) => {
-        // for each output o: apply the function f to get a ParserState[T]
-        // joins these parser states with the final (next >>= f)
+        // for each output o: apply the function f to get a ParserState[I1, T]
+        // and join these parser states with the final (next >>= f)
         // f(on) ~ ... ~ f(o1) ~ (next >>= f)
         // NB: The oldest output is on and the latest output is o1.
         //     Therefore the concatenation starts with f(on).
@@ -384,7 +384,7 @@ trait Parsers {
 
 }
 
-trait CharParsers extends Parsers {
+trait CharParsers2 extends Parsers2 {
 
   /**
    * Creates a parser for a regular expression.

@@ -5,9 +5,9 @@ import java.util.regex.Pattern
 
 /**
   */
-class ParsersTest extends FunSuite {
+class Parsers2Test extends FunSuite {
 
-  val parsers = new CharParsers {
+  val parsers = new CharParsers2 {
 
     type PS = ParserState[Char, Char]
 

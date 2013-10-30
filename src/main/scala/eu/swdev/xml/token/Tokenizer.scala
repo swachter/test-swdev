@@ -1,6 +1,6 @@
-package main.scala.eu.swdev.xml.token
+package eu.swdev.xml.token
 
-import main.scala.eu.swdev.parser.push.{CharPushParsers, PushParsers}
+import eu.swdev.parser.push.{CharPushParsers, PushParsers}
 import scala.util.matching.Regex
 
 /**

@@ -1,6 +1,5 @@
-package test.scala.eu.swdev.parser.push
+package eu.swdev.parser.push
 
-import main.scala.eu.swdev.parser.push.CharPushParsers
 import org.scalatest.FunSuite
 import scala.annotation.tailrec
 
