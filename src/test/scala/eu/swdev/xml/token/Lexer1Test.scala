@@ -4,9 +4,9 @@ import org.scalatest.FunSuite
 
 /**
   */
-class TokenizerTest extends FunSuite {
+class Lexer1Test extends FunSuite {
 
-  val parsers = new Tokenizer()
+  val parsers = new Lexer1()
 
   import parsers._
   import XmlPushParsers._

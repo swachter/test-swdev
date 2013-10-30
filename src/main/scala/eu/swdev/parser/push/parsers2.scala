@@ -2,6 +2,14 @@ package eu.swdev.parser.push
 
 import java.util.regex.Pattern
 
+/**
+ * Second trial implementation of a streaming push parser framework.
+ *
+ * The implementation is aligned with the streaming IO framework of the book "Functional Programming in Scala".
+ * Backtracking is realized by Mark, Reset, and Commit states.
+ *
+ * Summary: The implementation is rather complicated. Special care must be taken for nested commits.
+ */
 trait Parsers2 {
 
   sealed trait ParserState[-I, +O] { self =>

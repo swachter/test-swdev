@@ -2,6 +2,14 @@ package eu.swdev.parser.push
 
 import scala.annotation.tailrec
 
+/**
+ * Third trial implementation of a streaming push parser framework.
+ *
+ * The implementation is aligned with the streaming IO framework of the book "Functional Programming in Scala".
+ * Backtracking is realized by a Restore state that informs a source that some input must be replayed.
+ *
+ * Summary: Shortest implementation variant. The implementation is rather obvious.
+ */
 trait Parsers3 {
 
   implicit def getParser[I, O](f: () => Parser[I, O]): Parser[I, O] = f()

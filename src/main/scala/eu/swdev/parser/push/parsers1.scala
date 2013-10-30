@@ -4,8 +4,11 @@ import scala.annotation.tailrec
 import java.util.regex.Pattern
 
 /**
+ * First trial implementation of a streaming push parser framework.
+ *
+ * Implementation is too complicated.
  */
-trait PushParsers[I] {
+trait Parsers1[I] {
 
   trait PushParser[+O] { self =>
 
@@ -352,7 +355,7 @@ trait PushParsers[I] {
 
 }
 
-class CharPushParsers[C](charInput: C => Char) extends PushParsers[C] {
+class CharParsers1[C](charInput: C => Char) extends Parsers1[C] {
 
   import scala.util.matching.Regex
 

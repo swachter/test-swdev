@@ -1,13 +1,13 @@
 package eu.swdev.xml.token
 
-import eu.swdev.parser.push.{CharPushParsers, PushParsers}
+import eu.swdev.parser.push.{CharParsers1, Parsers1}
 import scala.util.matching.Regex
 
 /**
  */
-class Tokenizer {
+class Lexer1 {
 
-  val XmlPushParsers = new CharPushParsers[Char](c => c) {
+  val XmlPushParsers = new CharParsers1[Char](c => c) {
 
     var line = 1
     var column = 1

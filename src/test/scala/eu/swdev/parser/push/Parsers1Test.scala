@@ -3,9 +3,9 @@ package eu.swdev.parser.push
 import org.scalatest.FunSuite
 import scala.annotation.tailrec
 
-class PushParsersTest extends FunSuite {
+class Parsers1Test extends FunSuite {
 
-  val parsers = new CharPushParsers[Char](c => c) {
+  val parsers = new CharParsers1[Char](c => c) {
 
     implicit def pushParser(string: String): PushParser[Char] = new EchoPushParser(string, false)
 
