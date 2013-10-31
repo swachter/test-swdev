@@ -6,7 +6,7 @@ import scala.annotation.tailrec
  * Third trial implementation of a streaming push parser framework.
  *
  * The implementation is aligned with the streaming IO framework of the book "Functional Programming in Scala".
- * Backtracking is realized by a Restore state that informs a source that some input must be replayed.
+ * Backtracking is realized by a Replay state that informs a source that some input must be replayed.
  *
  * Summary: Shortest implementation variant. The implementation is rather obvious.
  */
@@ -23,7 +23,7 @@ trait Parsers3 {
       case Emit(out, next) => Emit(out, next ~ p2)
       case Halt() => p2
       case s@Error() => Error()
-      case Restore(input, next) => Restore(input, next ~ p2)
+      case Replay(input, next) => Replay(input, next ~ p2)
     }
 
     def |[O1 >: O](p2: => Parser[I, O1]): Parser[I, O1] = this or p2
@@ -60,10 +60,10 @@ trait Parsers3 {
           }
           case s@Error() => {
             // restore the recorded input and continue with the second alternative
-            Restore(input.reverse, p2)
+            Replay(input.reverse, p2)
           }
-          case Restore(inp, next) => {
-            Restore(inp, tryFirst(next, input.drop(inp.length)))
+          case Replay(inp, next) => {
+            Replay(inp, tryFirst(next, input.drop(inp.length)))
           }
         }
       }
@@ -96,7 +96,7 @@ trait Parsers3 {
         case Emit(out, next) => doAttempt(next, out ++ accu)
         case Halt() => Emit(accu, p2)
         case s@Error() => Error()
-        case Restore(input, next) => Restore(input, doAttempt(next, accu))
+        case Replay(input, next) => Replay(input, doAttempt(next, accu))
       }
       doAttempt(this, Seq())
     }
@@ -109,19 +109,32 @@ trait Parsers3 {
 
     def >>=[O1](f: O => Parser[I, O1]): Parser[I, O1] = this flatMap f
 
-    def flatMap[O1](f: O => Parser[I, O1]): Parser[I, O1] = this match {
-      case Await(push, flush) => Await(push andThen (_ >>= f), flush >>= f)
-      case Emit(out, next) => {
-        // for each output o: apply the function f to get a ParserState[T]
-        // joins these parser states with the final (next >>= f)
-        // f(on) ~ ... ~ f(o1) ~ (next >>= f)
-        // NB: The oldest output is on and the latest output is o1.
-        //     Therefore the concatenation starts with f(on).
-        out.foldLeft(next >>= f)((ps, o) => f(o) ~ ps)
+    /**
+     * Collects the complete output of this parser and then apply the flatMap function to each output and
+     * concatenates the resulting parsers.
+     *
+     * @param f
+     * @tparam O1
+     * @return
+     */
+    def flatMap[O1](f: O => Parser[I, O1]): Parser[I, O1] = {
+      def doFlatMap(p: Parser[I, O], accu: Seq[O]): Parser[I, O1] = {
+        p match {
+          case Await(push, flush) => Await(push andThen (doFlatMap(_, accu)), doFlatMap(flush, accu))
+          case Emit(out, next) => doFlatMap(next, out ++ accu)
+          case Halt() => {
+            // - for each output o: apply the function f to get a Parser[I, O1]
+            // - join these parser with the "and" combinator
+            // f(accu_n) ~ ... ~ f(accu_1) ~ Halt()
+            // NB: The oldest output is at the end of the accu
+            //     Therefore the concatenation starts with f(accu_n).
+             accu.foldLeft(Halt(): Parser[I, O1])((ps, o: O) => f(o) ~ ps)
+          }
+          case s@Error() => Error()
+          case Replay(input, next) => Replay(input, doFlatMap(next, accu))
+        }
       }
-      case s@Halt() => Halt()
-      case s@Error() => Error()
-      case Restore(input, next) => Restore(input, next >>= f)
+      doFlatMap(this, Seq())
     }
 
     def map[O1](f: O => O1): Parser[I, O1] = this match {
@@ -129,7 +142,7 @@ trait Parsers3 {
       case Emit(out, next) => Emit(out map f, next map f)
       case s@Halt() => Halt()
       case s@Error() => Error()
-      case Restore(input, next) => Restore(input, next map f)
+      case Replay(input, next) => Replay(input, next map f)
     }
 
     def ? = optional
@@ -154,12 +167,12 @@ trait Parsers3 {
           }
           case s@Halt() => s |> flush2
           case s@Error() => Error()
-          case Restore(input, next) => Restore(input, next |> p2)
+          case Replay(input, next) => Replay(input, next |> p2)
         }
         case Emit(out2, next2) => Emit(out2, this |> next2)
         case s@Halt() => Halt()
         case s@Error() => Error()
-        case Restore(input2, next2) => {
+        case Replay(input2, next2) => {
           // pipe the input that is to be replayed into next2
           Emit(input2, this) |> next2
         }
@@ -173,7 +186,7 @@ trait Parsers3 {
           case Emit(out, next) => doCollapse(next, out ++ accu)
           case s@Halt() => Emit(Seq(accu), Halt())
           case s@Error() => Error()
-          case Restore(input, next) => Restore(input, doCollapse(next, accu))
+          case Replay(input, next) => Replay(input, doCollapse(next, accu))
         }
       }
       doCollapse(this, Seq())
@@ -198,7 +211,7 @@ trait Parsers3 {
 
   case class Error[I, O]() extends Parser[I, O]
 
-  case class Restore[I, O](input: Seq[I], next: Parser[I, O]) extends Parser[I, O]
+  case class Replay[I, O](input: Seq[I], next: Parser[I, O]) extends Parser[I, O]
 
   //
   //
@@ -257,7 +270,7 @@ trait Parsers3 {
       case Emit(out, next) => run(next, runState.output(out.to[List]), ps :: log)
       case Halt() => (Success(runState.result.reverse, runState.unconsumed), ps :: log)
       case Error() => (Failure(runState.result.reverse, runState.unconsumed), ps :: log)
-      case Restore(input, next) => run(next, runState.restore(input), ps :: log)
+      case Replay(input, next) => run(next, runState.restore(input), ps :: log)
     }
   }
 
