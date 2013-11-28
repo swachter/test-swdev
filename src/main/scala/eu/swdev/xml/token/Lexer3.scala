@@ -11,24 +11,24 @@ class Lexer3 {
 
     type CharParser[O] = Parser[Char, O]
 
-    implicit def charParser(char: Char): Parser[Char, Nothing] = require(char)
+    implicit def charParser(char: Char): Parser[Char, Nothing] = consumeOneAndDrop[Char](char, (c: Char) => s"unexpected character - expected: '$char'; actual: '$c'", s"missing character '$char'")
 
-    implicit def stringParser(str: String): Parser[Char, Nothing] = require(str.toList)
+    implicit def stringParser(str: String): Parser[Char, Nothing] = consumeSeqAndDrop[Char](str.toList, s => c => s"unexpected character - remaining sequence: '$s'; actual: '$c'", s => s"missing character - remaining sequence: '$s'")
 
     // 1
     lazy val _document = _prolog ~ _element ~ _misc.many
 
     // 2
-    lazy val _Char = checkChar(isChar)
+    lazy val _Char = checkChar(isChar, Halt())
 
     // 3
-    lazy val _S: CharParser[Nothing] = (Await(c => if (isWhitespace(c)) Halt() else Error(), Error()): CharParser[Nothing]).oneOrMore
+    lazy val _S: CharParser[Nothing] = (consumeOneAndDrop[Char](isWhitespace(_), (c: Char) => s"expected whitespace - character: '$c'", "missing whitespace")).oneOrMore
 
     // 4
-    lazy val _NameStartChar = checkChar(isNameStartChar)
+    lazy val _NameStartChar = checkChar(isNameStartChar, Halt())
 
     // 4a
-    lazy val _NameChar = checkChar(isNameChar)
+    lazy val _NameChar = checkChar(isNameChar, Halt())
 
     // 5
     lazy val _Name = (_NameStartChar ~ _NameChar.many).collapse.map(_.foldRight(new StringBuilder)((c, b) => b.append(c)).toString())
@@ -95,7 +95,9 @@ class Lexer3 {
 
     def quotes[O](p: CharParser[O]): CharParser[O] = ("'" ~ p ~ "'") | (("\"" ~ p ~ "\""))
 
-    def checkChar(check: Char => Boolean): CharParser[Char] = Await(i => if (check(i)) Emit(Seq(i), Halt()) else Error(), Error())
+    def checkChar(check: Char => Boolean, default: => CharParser[Char]): CharParser[Char] = {
+      consumeOneAndEmit(check, default, (char: Char) => s"unexpected character: $char", "missing character")
+    }
 
     //
     //
@@ -110,13 +112,13 @@ class Lexer3 {
     //
 
     def charData: CharParser[String] = {
-      val charParser: CharParser[Char] = Await(char => if (char != '<' && char != '&') Emit(Seq(char), Halt()) else Error(), Error())
-      charParser.oneOrMore.collapse.map(seq => seq.foldLeft(new StringBuilder)((b, c) => b.append(c)).toString())
+      val parser: CharParser[Char] = consumeOneAndEmit[Char]((c: Char) => c != '<' && c != '&', Halt[Char, Nothing](), (c: Char) => s"invalid charData character '$c'", "missing charData")
+      parser.oneOrMore.collapse.map(seq => seq.foldLeft(new StringBuilder)((b, c) => b.append(c)).toString())
     }
 
     def attrChars(quote: Char): CharParser[Token] = {
-      val attrChar: CharParser[Char] = Await(char => if (char != '<' && char != '&' && char != quote) Emit(Seq(char), Halt()) else Error(), Error())
-      attrChar.oneOrMore.collapse.map(seq => AttrChars(seq.foldRight(new StringBuilder)((c, b) => b.append(c)).toString()))
+      val parser: CharParser[Char] = consumeOneAndEmit[Char]((c: Char) => c != '<' && c != '&' && c != quote, Halt[Char, Nothing](), (c: Char) => s"invalid attrChar character '$c'", "missing attrChar")
+      parser.oneOrMore.collapse.map(seq => AttrChars(seq.foldRight(new StringBuilder)((c, b) => b.append(c)).toString()))
     }
 
   }
@@ -136,7 +138,7 @@ class Lexer3 {
   case class CharRef(code: String, isHex: Boolean) extends Token
   case class EntityRef(code: String) extends Token
 
-  private def isWhitespace(char: Char) = char == ' ' || char == '\n' || char == '\t' || char == '\r'
+  private def isWhitespace(char: Char): Boolean = char == ' ' || char == '\n' || char == '\t' || char == '\r'
 
   private def isChar(char: Char) = char >= '\u0020' && char <= '\ud7ff' || char == '\u0009' || char == '\u000a' || char == '\u000d' || char >= '\ue000' && char <= '\ufffd'
 

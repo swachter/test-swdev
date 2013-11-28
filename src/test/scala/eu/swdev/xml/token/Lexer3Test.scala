@@ -21,7 +21,7 @@ class Lexer3Test extends FunSuite {
     assert(drive[Nothing](_S, " ") === Success(Nil, Nil))
     assert(drive[Nothing](_S, "  ") === Success(Nil, Nil))
     assert(drive[Nothing](_S, "  x") === Success(Nil, 'x' :: Nil))
-    assert(drive[Nothing](_S, "x") === Failure(Nil, Nil))
+    assert(drive[Nothing](_S, "x") === Failure(Nil, Seq('x')))
   }
 
   test ("VersionInfo") {

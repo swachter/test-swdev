@@ -1,17 +1,17 @@
 package eu.swdev.parser.push
 
-import org.scalatest.FunSuite
+import org.scalatest.{Inside, PartialFunctionValues, FunSuite}
 import java.util.regex.Pattern
 
 /**
   */
-class Parsers3Test extends FunSuite {
+class Parsers3Test extends FunSuite with Inside {
 
   val parsers = new CharParsers3 {
 
     type PS = Parser[Char, Char]
 
-    val _AandB = 'a' ~ 'b'
+    val _AandB: PS = 'a' ~ 'b'
 
     val _AorB: PS = 'a' or 'b'
 
@@ -24,7 +24,7 @@ class Parsers3Test extends FunSuite {
 
     val _attemptABorAorA = attempt(('a' ~ 'b') or 'a') or 'a'
 
-    val _AABorAB = ('a' ~ 'a' ~ 'b') ||| ('a' ~ 'b')
+    val _AABorrrAB = ('a' ~ 'a' ~ 'b') ||| ('a' ~ 'b')
 
     val _Amany = 'a'.many
 
@@ -66,7 +66,7 @@ class Parsers3Test extends FunSuite {
 
     val _yesOrNo = "yes|no".p
 
-    implicit def parser(char: Char): PS = Await(c => if (c == char) Emit(Seq(c), Halt()) else Error(), Error())
+    implicit def parser(char: Char): PS = consumeOneAndEmit(char, (c: Char) => s"unexpected character - actual '$c'; expected: '$char'", s"missing character: '$char'")
 
     implicit class StrOps(string: String) {
       def p: Parser[Char, String] = regexParser(Pattern.compile(string), true)
@@ -80,22 +80,46 @@ class Parsers3Test extends FunSuite {
       println(log)
       rr
     }
+
+    def drive2[O](ps: Parser[Char, O], string: String): RunResult2[Char, O] = {
+      val (rr, log) = run2(ps, new RunStateImpl[Char, O](string.to[List], Nil), Nil, Nil)
+      println(log)
+      rr
+    }
+
   }
 
   import parsers._
 
+  class Check(val parser: PS) {
+    implicit class CheckOp(input: String) {
+      def ~>(pf: PartialFunction[(Seq[Char], Seq[Char], List[ErrorMsg]), Unit]): Unit = {
+        inside(drive2(parser, input)) { pf }
+      }
+    }
+  }
+
+
+  val unexpected = "unexpected".r
+  val missing = "missing".r
+
   test("a~b") {
-    assert(drive(_AandB, "ab") === Success(Seq('a', 'b'), Seq()))
-    assert(drive(_AandB, "abc") === Success(Seq('a', 'b'), Seq('c')))
-    assert(drive(_AandB, "ac") === Failure(Seq('a'), Seq()))
-    assert(drive(_AandB, "b") === Failure(Seq(), Seq()))
+    new Check(_AandB) {
+      "ab" ~> { case (Seq('a', 'b'), Seq(), Nil) => }
+      "abc" ~> { case (Seq('a', 'b'), Seq('c'), Nil) => }
+      "ac" ~> { case (Seq('a'), Seq('c'), List(unexpected)) => }
+      "a" ~> { case (Seq('a'), Seq(), List(missing)) => }
+      "b" ~> { case (Seq('b'), Seq(), List(unexpected)) => }
+    }
   }
 
   test("a|b") {
-    assert(drive(_AorB, "a") === Success(Seq('a'), Seq()))
-    assert(drive(_AorB, "b") === Success(Seq('b'), Seq()))
-    assert(drive(_AorB, "bbc") === Success(Seq('b'), Seq('b', 'c')))
-    assert(drive(_AorB, "x") === Failure(Seq(), Seq()))
+    new Check(_AorB) {
+      "a" ~> { case (Seq('a'), Seq(), Nil) => }
+      "b" ~> { case (Seq('b'), Seq(), Nil) => }
+      "bbc" ~> { case (Seq('b'), Seq('b', 'c'), Nil) => }
+      "x" ~> { case (Seq(), Seq('x'), Seq(unexpected)) => }
+    }
   }
 
   test("(a|b)|c") {
@@ -111,15 +135,15 @@ class Parsers3Test extends FunSuite {
     assert(drive(_attemptABorA, "a") === Success(Seq('a'), Seq()))
     assert(drive(_attemptABorA, "abc") === Success(Seq('a', 'b'), Seq('c')))
     assert(drive(_attemptABorA, "ac") === Success(Seq('a'), Seq('c')))
-    assert(drive(_attemptABorA, "c") === Failure(Seq(), Seq()))
+    assert(drive(_attemptABorA, "c") === Failure(Seq(), Seq('c')))
   }
 
   test("ab|a") {
     assert(drive(_AcommitBorA, "ab") === Success(Seq('a', 'b'), Seq()))
     assert(drive(_AcommitBorA, "a") === Failure(Seq('a'), Seq()))
     assert(drive(_AcommitBorA, "abc") === Success(Seq('a', 'b'), Seq('c')))
-    assert(drive(_AcommitBorA, "ac") === Failure(Seq('a'), Seq()))
-    assert(drive(_AcommitBorA, "c") === Failure(Seq(), Seq()))
+    assert(drive(_AcommitBorA, "ac") === Failure(Seq('a'), Seq('c')))
+    assert(drive(_AcommitBorA, "c") === Failure(Seq(), Seq('c')))
   }
 
   test("attempt{ab|a}|a") {
@@ -128,15 +152,15 @@ class Parsers3Test extends FunSuite {
     assert(drive(_attemptABorAorA, "a") === Success(Seq('a'), Seq()))
     assert(drive(_attemptABorAorA, "abc") === Success(Seq('a', 'b'), Seq('c')))
     assert(drive(_attemptABorAorA, "ac") === Success(Seq('a'), Seq('c')))
-    assert(drive(_attemptABorAorA, "c") === Failure(Seq(), Seq()))
+    assert(drive(_attemptABorAorA, "c") === Failure(Seq(), Seq('c')))
   }
 
   test("aab|||ab") {
-    assert(drive(_AABorAB, "aab") === Success(Seq('a', 'a', 'b'), Seq()))
-    assert(drive(_AABorAB, "ab") === Success(Seq('a', 'b'), Seq()))
-    assert(drive(_AABorAB, "abc") === Success(Seq('a', 'b'), Seq('c')))
-    assert(drive(_AABorAB, "aabc") === Success(Seq('a', 'a', 'b'), Seq('c')))
-    assert(drive(_AABorAB, "ac") === Failure(Seq('a'), Seq()))
+    assert(drive(_AABorrrAB, "aab") === Success(Seq('a', 'a', 'b'), Seq()))
+    assert(drive(_AABorrrAB, "ab") === Success(Seq('a', 'b'), Seq()))
+    assert(drive(_AABorrrAB, "abc") === Success(Seq('a', 'b'), Seq('c')))
+    assert(drive(_AABorrrAB, "aabc") === Success(Seq('a', 'a', 'b'), Seq('c')))
+    assert(drive(_AABorrrAB, "ac") === Failure(Seq('a'), Seq('c')))
   }
 
   test("a.many") {
@@ -153,7 +177,7 @@ class Parsers3Test extends FunSuite {
     assert(drive(_AoneOrMore, "aa") === Success(Seq('a', 'a'), Seq()))
     assert(drive(_AoneOrMore, "ab") === Success(Seq('a'), Seq('b')))
     assert(drive(_AoneOrMore, "aabb") === Success(Seq('a', 'a'), Seq('b', 'b')))
-    assert(drive(_AoneOrMore, "b") === Failure(Seq(), Seq()))
+    assert(drive(_AoneOrMore, "b") === Failure(Seq(), Seq('b')))
   }
 
   test("a?") {
@@ -171,22 +195,22 @@ class Parsers3Test extends FunSuite {
   test("a{bind}b") {
     assert(drive(_AbindB, "ab") === Success(Seq(('a', 'b')), Seq()))
     assert(drive(_AbindB, "abc") === Success(Seq(('a', 'b')), Seq('c')))
-    assert(drive(_AbindB, "ac") === Failure(Seq(), Seq()))
-    assert(drive(_AbindB, "b") === Failure(Seq(), Seq()))
+    assert(drive(_AbindB, "ac") === Failure(Seq(), Seq('c')))
+    assert(drive(_AbindB, "b") === Failure(Seq(), Seq('b')))
   }
 
   test("a|>a") {
     assert(drive(_ApipeA, "a") === Success(Seq('a'), Seq()))
     assert(drive(_ApipeA, "ab") === Success(Seq('a'), Seq('b')))
     assert(drive(_ApipeA, "") === Failure(Seq(), Seq()))
-    assert(drive(_ApipeA, "b") === Failure(Seq(), Seq()))
+    assert(drive(_ApipeA, "b") === Failure(Seq(), Seq('b')))
   }
 
   test("(a|b)|>(a|b)") {
     assert(drive(_AorBpipeAorB, "a") === Success(Seq('a'), Seq()))
     assert(drive(_AorBpipeAorB, "b") === Success(Seq('b'), Seq()))
     assert(drive(_AorBpipeAorB, "bbc") === Success(Seq('b'), Seq('b', 'c')))
-    assert(drive(_AorBpipeAorB, "x") === Failure(Seq(), Seq()))
+    assert(drive(_AorBpipeAorB, "x") === Failure(Seq(), Seq('x')))
   }
 
   test("{any}") {
@@ -231,7 +255,7 @@ class Parsers3Test extends FunSuite {
     assert(drive(_ABorrrA, "a") === Success(Seq('a'), Seq()))
     assert(drive(_ABorrrA, "abc") === Success(Seq('a', 'b'), Seq('c')))
     assert(drive(_ABorrrA, "ac") === Success(Seq('a'), Seq('c')))
-    assert(drive(_ABorrrA, "c") === Failure(Seq(), Seq()))
+    assert(drive(_ABorrrA, "c") === Failure(Seq(), Seq('c')))
   }
 
   test("{any}|>(ab|||a)") {
@@ -279,6 +303,7 @@ class Parsers3Test extends FunSuite {
     assert(drive(_yesOrNo, "no") === Success(Seq("no"), Seq()))
     assert(drive(_yesOrNo, "yesx") === Success(Seq("yes"), Seq('x')))
     assert(drive(_yesOrNo, "y") === Failure(Seq(), Seq('y')))
+    assert(drive(_yesOrNo, "ye") === Failure(Seq(), Seq('y', 'e')))
   }
 
   def AorBorC(ps: parsers.PS): Unit = {
@@ -288,7 +313,7 @@ class Parsers3Test extends FunSuite {
     assert(drive(ps, "ax") === Success(Seq('a'), Seq('x')))
     assert(drive(ps, "bx") === Success(Seq('b'), Seq('x')))
     assert(drive(ps, "cx") === Success(Seq('c'), Seq('x')))
-    assert(drive(ps, "x") === Failure(Seq(), Seq()))
+    assert(drive(ps, "x") === Failure(Seq(), Seq('x')))
   }
 
 }

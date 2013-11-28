@@ -14,7 +14,7 @@ trait Parsers3 {
 
   implicit def getParser[I, O](f: () => Parser[I, O]): Parser[I, O] = f()
 
-  sealed trait Parser[I, +O] { //self =>
+  sealed trait Parser[I, +O] { self =>
 
     def ~[O1 >: O](p2: => Parser[I, O1]): Parser[I, O1] = this and p2
 
@@ -22,7 +22,7 @@ trait Parsers3 {
       case Await(push, flush) => Await(push andThen (_ ~ p2), flush ~ p2)
       case Emit(out, next) => Emit(out, next ~ p2)
       case Halt() => p2
-      case s@Error() => Error()
+      case s@Error(msg, recover) => Error(msg, (recover ~ p2) | p2.sync)
       case Replay(input, next) => Replay(input, next ~ p2)
     }
 
@@ -58,7 +58,7 @@ trait Parsers3 {
           case s@Halt() => {
             s
           }
-          case s@Error() => {
+          case s: Error[I, O] => {
             // restore the recorded input and continue with the second alternative
             Replay(input.reverse, p2)
           }
@@ -95,7 +95,7 @@ trait Parsers3 {
         case Await(push, flush) => Await(push andThen (doAttempt(_, accu)), doAttempt(flush, accu))
         case Emit(out, next) => doAttempt(next, out ++ accu)
         case Halt() => Emit(accu, p2)
-        case s@Error() => Error()
+        case s: Error[I, O] => s
         case Replay(input, next) => Replay(input, doAttempt(next, accu))
       }
       doAttempt(this, Seq())
@@ -110,7 +110,7 @@ trait Parsers3 {
     def >>=[O1](f: O => Parser[I, O1]): Parser[I, O1] = this flatMap f
 
     /**
-     * Collects the complete output of this parser and then apply the flatMap function to each output and
+     * Collects the complete output of this parser and then applies the flatMap function to each output, and finally
      * concatenates the resulting parsers.
      *
      * @param f
@@ -130,7 +130,9 @@ trait Parsers3 {
             //     Therefore the concatenation starts with f(accu_n).
              accu.foldLeft(Halt(): Parser[I, O1])((ps, o: O) => f(o) ~ ps)
           }
-          case s@Error() => Error()
+          case Error(msg, recover) => {
+            Error(msg, doFlatMap(recover, accu))
+          }
           case Replay(input, next) => Replay(input, doFlatMap(next, accu))
         }
       }
@@ -141,7 +143,7 @@ trait Parsers3 {
       case Await(push, flush) => Await(push andThen (_ map f), flush map f)
       case Emit(out, next) => Emit(out map f, next map f)
       case s@Halt() => Halt()
-      case s@Error() => Error()
+      case Error(msg, recover) => Error(msg, recover.map(f))
       case Replay(input, next) => Replay(input, next map f)
     }
 
@@ -166,12 +168,12 @@ trait Parsers3 {
             }
           }
           case s@Halt() => s |> flush2
-          case s@Error() => Error()
+          case Error(msg, recover) => Error(msg, recover |> p2)
           case Replay(input, next) => Replay(input, next |> p2)
         }
         case Emit(out2, next2) => Emit(out2, this |> next2)
         case s@Halt() => Halt()
-        case s@Error() => Error()
+        case Error(msg, recover) => Error(msg, this |> recover)
         case Replay(input2, next2) => {
           // pipe the input that is to be replayed into next2
           Emit(input2, this) |> next2
@@ -185,11 +187,71 @@ trait Parsers3 {
           case Await(push, flush) => Await(push andThen (doCollapse(_, accu)), doCollapse(flush, accu))
           case Emit(out, next) => doCollapse(next, out ++ accu)
           case s@Halt() => Emit(Seq(accu), Halt())
-          case s@Error() => Error()
+          case Error(msg, recover) => Error(msg, doCollapse(recover, accu))
           case Replay(input, next) => Replay(input, doCollapse(next, accu))
         }
       }
       doCollapse(this, Seq())
+    }
+
+    def sync: Parser[I, O] = this | (skipOne("missing input") ~ this.sync)
+
+    def sync(max: Int): Parser[I, O] = if (max > 0) this | (skipOne("missing input") ~ this.sync(max - 1)) else this
+
+    def withRecovery: Parser[I, O] = self trans {
+      case Await(push, flush) => Await(
+        i => {
+          val tp: Parser[I, O] = push(i)
+          tp trans {
+            case Error(msg, recover) => Error(msg, self or Replay(Seq(i), Halt()))
+            case p => p
+          }
+        },
+        flush
+      )
+    }
+
+    def withCheck(check: I => Boolean, unexpectedMsg: => I => String): Parser[I, O] = self trans {
+      case Await(push, flush) => Await(i => {
+        if (check(i)) push(i).withCheck(check, unexpectedMsg) else Error(unexpectedMsg(i), Halt())
+      }, flush)
+    }
+
+  }
+
+  implicit class InvariantParserOps[I, O](val parser: Parser[I, O]) { //extends AnyVal {
+
+    def trans(pf: PartialFunction[Parser[I, O], Parser[I, O]]): Parser[I, O] = {
+      if (pf.isDefinedAt(parser)) {
+        pf(parser)
+      } else {
+        parser match {
+//            case Await(push, flush) => Await(push andThen (_ trans pf), flush() trans pf)
+          case Await(push, flush) => Await[I, O]((i: I) => {
+            val p: Parser[I, O] = push(i)
+            p trans pf
+          }, {
+            val p: Parser[I, O] = flush
+            p trans pf
+          })
+          case Emit(out, next) => Emit(out, next trans pf)
+          case s@Halt() => s
+          case Error(msg, rec) => Error(msg, rec trans pf)
+          case Replay(input, next) => Replay(input, next trans pf)
+        }
+      }
+    }
+
+    def &(p2: => Parser[I, O]): Parser[I, O] = parser match {
+      case Await(push, flush) => Await(push andThen (_ ~ p2), flush ~ p2)
+      case Emit(out, next) => Emit(out, next ~ p2)
+      case Halt() => p2
+      case s@Error(msg, recover) => Error(msg, (recover ~ p2) | p2.sync)
+      case Replay(input, next) => Replay(input, next ~ p2)
+    }
+
+    def withErrorValue(errorValue: => Parser[I, O]): Parser[I, O] = parser trans {
+      case Error(msg, recover) => Error(msg, errorValue & recover)
     }
 
   }
@@ -209,7 +271,7 @@ trait Parsers3 {
 
   case class Halt[I, O]() extends Parser[I, O]
 
-  case class Error[I, O]() extends Parser[I, O]
+  case class Error[I, O](msg: String, recover: Parser[I, O]) extends Parser[I, O]
 
   case class Replay[I, O](input: Seq[I], next: Parser[I, O]) extends Parser[I, O]
 
@@ -222,14 +284,35 @@ trait Parsers3 {
   def filter[I](f: I => Boolean): Parser[I, I] = (Await(i => if (f(i)) Emit(Seq(i), Halt()) else Halt(), Halt()): Parser[I, I]).many
 
   // a process that skips a number of inputs
-  def skip(cnt: Int): Parser[Any, Nothing] = if (cnt > 0) Await((i => skip(cnt - 1)), Halt()) else Halt()
+  def skip[I](cnt: Int, missingMsg: => String): Parser[I, Nothing] = if (cnt > 0) Await((i => skip(cnt - 1, missingMsg)), Error(missingMsg, Halt())) else Halt()
 
-  def require[I](input: I): Parser[I, Nothing] = Await(i => if (i == input) Halt() else Error(), Error())
+  def echoOne[I](missingMsg: => String): Await[I, I] = Await(i => Emit(Seq(i), Halt()), Error(missingMsg, Halt()))
+  def skipOne[I](missingMsg: => String): Await[I, Nothing] = Await(i => Halt(), Error(missingMsg, Halt()))
 
-  def require[I](input: Seq[I]): Parser[I, Nothing] = if (input.isEmpty) {
-    Halt()
-  } else {
-    Await(i => if (i == input.head) require(input.tail) else Error(), Error())
+  def consumeOneAndDrop[I](check: I => Boolean, unexpectedMsg: => I => String, missingMsg: => String): Parser[I, Nothing] = {
+    skipOne(missingMsg).withCheck(check, unexpectedMsg).withRecovery
+  }
+
+  def consumeOneAndDrop[I](input: I, unexpectedMsg: => I => String, missingMsg: => String): Parser[I, Nothing] = {
+    consumeOneAndDrop(_ == input, unexpectedMsg, missingMsg)
+  }
+
+  def consumeSeqAndDrop[I](input: Seq[I], unexpectedMsg: => Seq[I] => I => String, missingMsg: => Seq[I] => String): Parser[I, Nothing] = input match {
+    case h :: t => consumeOneAndDrop(h, unexpectedMsg(input), missingMsg(input)) ~ consumeSeqAndDrop(t, unexpectedMsg, missingMsg)
+    case _ => Halt()
+  }
+
+  def consumeOneAndEmit[I](check: I => Boolean, default: => Parser[I, I], unexpectedMsg: => I => String, missingMsg: => String): Parser[I, I] = {
+    echoOne(missingMsg).withCheck(check, unexpectedMsg).withRecovery // .withErrorValue(default)
+  }
+
+  def consumeOneAndEmit[I](input: I, unexpectedMsg: => I => String, missingMsg: => String): Parser[I, I] = {
+    consumeOneAndEmit(_ == input, Emit(Seq(input), Halt()), unexpectedMsg, missingMsg)
+  }
+
+  def consumeSeqAndEmit[I](input: Seq[I], unexpectedMsg: => Seq[I] => I => String, missingMsg: => Seq[I] => String): Parser[I, I] = input match {
+    case h :: t => consumeOneAndEmit(h, unexpectedMsg(input), missingMsg(input)) ~ consumeSeqAndEmit(t, unexpectedMsg, missingMsg)
+    case _ => Halt()
   }
 
   def attempt[I, O](p: Parser[I, O]): Parser[I, O] = p attemptAndThen Halt()
@@ -269,8 +352,30 @@ trait Parsers3 {
       }
       case Emit(out, next) => run(next, runState.output(out.to[List]), ps :: log)
       case Halt() => (Success(runState.result.reverse, runState.unconsumed), ps :: log)
-      case Error() => (Failure(runState.result.reverse, runState.unconsumed), ps :: log)
+      case Error(msg, recover) => {
+        val (rr, l) = run(recover, runState, ps :: log)
+        (rr match {
+          case Success(out, unconsumed) => Failure(out, unconsumed)
+          case _ => rr
+        }, l)
+      }
       case Replay(input, next) => run(next, runState.restore(input), ps :: log)
+    }
+  }
+
+  type ErrorMsg = String
+  type RunResult2[I, O] = (Seq[O], Seq[I], List[ErrorMsg])
+
+  def run2[I, O](ps: Parser[I, O], runState: RunState[I, O], errors: List[ErrorMsg], log: List[Parser[I, O]]): (RunResult2[I, O], List[Parser[I, O]]) = {
+    ps match {
+      case Await(push, flush) => runState.input match {
+        case Some(i) => run2(push(i), runState.next, errors, ps :: log)
+        case None => run2(flush, runState, errors, ps :: log)
+      }
+      case Emit(out, next) => run2(next, runState.output(out.to[List]), errors, ps :: log)
+      case Halt() => ((runState.result.reverse, runState.unconsumed, errors), ps :: log)
+      case Error(msg, recover) => run2(recover, runState, msg :: errors, ps :: log)
+      case Replay(input, next) => run2(next, runState.restore(input), errors, ps :: log)
     }
   }
 
@@ -297,8 +402,6 @@ trait Parsers3 {
   sealed trait RunResult[I, O]
   case class Success[I, O](out: Seq[O], unconsumed: Seq[I]) extends RunResult[I, O]
   case class Failure[I, O](out: Seq[O], unconsumed: Seq[I]) extends RunResult[I, O]
-
-
 
 }
 
@@ -329,9 +432,9 @@ trait CharParsers3 extends Parsers3 {
       } else {
         if (matcher.hitEnd()) {
           // maybe there is a longer match
-          Await((c: Char) => step(sb + c), Error()) | Error()
+          Await((c: Char) => step(sb + c), Error("regular expression did not match", Replay(sb.toList, Halt())))
         } else {
-          Error()
+          Error("regular expression did not match", Replay(sb.toList, Halt()))
         }
       }
     }
