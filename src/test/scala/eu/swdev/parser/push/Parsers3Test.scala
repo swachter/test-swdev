@@ -11,6 +11,8 @@ class Parsers3Test extends FunSuite with Inside {
 
     type PS = Parser[Char, Char]
 
+    val _A: PS = 'a'
+
     val _AandB: PS = 'a' ~ 'b'
 
     val _AorB: PS = 'a' or 'b'
@@ -101,8 +103,16 @@ class Parsers3Test extends FunSuite with Inside {
 
 
   val unexpected = "unexpected".r
+  val unexpected2 = "unexpected".r
   val missing = "missing".r
 
+  test("a") {
+    new Check(_A) {
+      "a" ~> { case (Seq('a'), Seq(), Nil) => }
+      "" ~> { case (Seq(), Seq(), Seq(missing)) => }
+      "b" ~> { case (Seq(), Seq('b'), Seq(unexpected)) => }
+    }
+  }
   test("a~b") {
     new Check(_AandB) {
       "ab" ~> { case (Seq('a', 'b'), Seq(), Nil) => }
@@ -110,6 +120,9 @@ class Parsers3Test extends FunSuite with Inside {
       "ac" ~> { case (Seq('a'), Seq('c'), List(unexpected)) => }
       "a" ~> { case (Seq('a'), Seq(), List(missing)) => }
       "b" ~> { case (Seq('b'), Seq(), List(unexpected)) => }
+      "xxxxxb" ~> { case (Seq('b'), Seq(), List(unexpected)) => }
+      "xaxxxb" ~> { case (Seq('a', 'b'), Seq(), unexpected :: unexpected2 :: Nil) => }
+      "xxaxxxb" ~> { case (Seq('a', 'b'), Seq(), unexpected :: unexpected2 :: Nil) => }
     }
   }
 
