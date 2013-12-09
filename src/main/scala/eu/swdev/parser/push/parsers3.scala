@@ -76,14 +76,34 @@ trait Parsers3 {
       tryFirst(this, Seq(), Seq())
     }
 
-//    def race[O1 >: O](p2: Parser[I, O1]): Parser[I, O1] = {
-//      def doRace(p1: Parser[I, O], replay1: Seq[I], p2: Parser[I, O1], replay2: Seq[I]): Parser[I, O1] = {
-//        (p1, p2) match {
-//          case (Await(push1, flush1), Await(push2, flush2)) => Await(i => doRace(push1(i), replay1, push2(i), replay2), doRace(flush1, replay1, flush2, replay2))
-//        }
-//      }
-//      doRace(this, Seq(), p2, Seq())
-//    }
+    def race[O1 >: O](p2: Parser[I, O1]): Parser[I, O1] = {
+      def doRace(p1: Parser[I, O], replay1: Seq[I], p2: Parser[I, O1], replay2: Seq[I]): Parser[I, O1] = {
+        (p1, p2) match {
+          // advance the left and right side while replayable input is available
+          case (Await(push1, flush1), s2) if !replay1.isEmpty => doRace(push1(replay1.head), replay1.tail, s2, replay2)
+          case (s1, Await(push2, flush2)) if !replay2.isEmpty => doRace(s1, replay1, push2(replay2.head), replay2.tail)
+            
+          // both sides wait for input more input
+          case (Await(push1, flush1), Await(push2, flush2)) => Await(i => doRace(push1(i), replay1, push2(i), replay2), doRace(flush1, replay1, flush2, replay2))
+            
+          // the side that emits first wins
+          case (Emit(out1, next1), _) => Emit(out1, replay(replay1, next1))
+          case (_, Emit(out2, next2)) => Emit(out2, replay(replay2, next2))
+
+          // if any side halts then the race halts
+          case (Halt(), _) => Halt()
+          case (_, Halt()) => Halt()
+
+          // if a side reaches an error then the other side wins
+          case (Error(msg1, rec1), s2) => s2
+          case (s1, Error(msg2, rec2)) => s1
+            
+          case (Replay(r, n), s) => doRace(n, r ++ replay1, s, replay2)
+          case (s, Replay(r, n)) => doRace(s, replay1, n, r ++ replay2)
+        }
+      }
+      doRace(this, Seq(), p2, Seq())
+    }
 
     /**
      * An "or" parser that attempts this parser and in case of failure tries the specified alternative parser.
@@ -296,6 +316,14 @@ trait Parsers3 {
    */
   case class Replay[I, O](input: Seq[I], next: Parser[I, O]) extends Parser[I, O]
 
+  def replay[I, O](input: Seq[I], next: Parser[I, O]): Parser[I, O] = {
+    if (input.isEmpty) next else Replay(input, next)
+  }
+
+  def error[I, O](errs: Seq[String], next: Parser[I, O]): Parser[I, O] = {
+    errs.foldRight(next)((msg, p) => Error(msg, Some(p)))
+  }
+
   //
   //
   //
@@ -389,7 +417,7 @@ trait Parsers3 {
   }
 
   type ErrorMsg = String
-  type RunResult2[I, O] = (Seq[O], Seq[I], List[ErrorMsg])
+  type  RunResult2[I, O] = (Seq[O], Seq[I], List[ErrorMsg])
 
   def run2[I, O](ps: Parser[I, O], runState: RunState[I, O], errors: List[ErrorMsg], log: List[Parser[I, O]]): (RunResult2[I, O], List[Parser[I, O]]) = {
     ps match {

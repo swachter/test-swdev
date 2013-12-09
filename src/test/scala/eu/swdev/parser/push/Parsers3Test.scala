@@ -89,14 +89,20 @@ class Parsers3Test extends FunSuite with Inside {
       rr
     }
 
+    def drive3[O](ps: Parser[Char, O], string: String): (String, String, List[String]) = {
+      val (rr, log) = run2(ps, new RunStateImpl[Char, O](string.to[List], Nil), Nil, Nil)
+      println(log)
+      (rr._1.mkString, rr._2.mkString, rr._3)
+    }
+
   }
 
   import parsers._
 
   class Check(val parser: PS) {
     implicit class CheckOp(input: String) {
-      def ~>(pf: PartialFunction[(Seq[Char], Seq[Char], List[ErrorMsg]), Unit]): Unit = {
-        inside(drive2(parser, input)) { pf }
+      def ~>(pf: PartialFunction[(String, String, List[ErrorMsg]), Unit]): Unit = {
+        inside(drive3(parser, input)) { pf }
       }
     }
   }
@@ -108,30 +114,30 @@ class Parsers3Test extends FunSuite with Inside {
 
   test("a") {
     new Check(_A) {
-      "a" ~> { case (Seq('a'), Seq(), Nil) => }
-      "" ~> { case (Seq(), Seq(), Seq(missing)) => }
-      "b" ~> { case (Seq(), Seq('b'), Seq(unexpected)) => }
+      "a" ~> { case ("a", "", Nil) => }
+      "" ~> { case ("", "", Seq(missing)) => }
+      "b" ~> { case ("", "b", Seq(unexpected)) => }
     }
   }
   test("a~b") {
     new Check(_AandB) {
-      "ab" ~> { case (Seq('a', 'b'), Seq(), Nil) => }
-      "abc" ~> { case (Seq('a', 'b'), Seq('c'), Nil) => }
-      "ac" ~> { case (Seq('a'), Seq('c'), List(unexpected)) => }
-      "a" ~> { case (Seq('a'), Seq(), List(missing)) => }
-      "b" ~> { case (Seq('b'), Seq(), List(unexpected)) => }
-      "xxxxxb" ~> { case (Seq('b'), Seq(), List(unexpected)) => }
-      "xaxxxb" ~> { case (Seq('a', 'b'), Seq(), unexpected :: unexpected2 :: Nil) => }
-      "xxaxxxb" ~> { case (Seq('a', 'b'), Seq(), unexpected :: unexpected2 :: Nil) => }
+      "ab" ~> { case ("ab", "", Nil) => }
+      "abc" ~> { case ("ab", "c", Nil) => }
+      "ac" ~> { case ("a", "c", List(unexpected)) => }
+      "a" ~> { case ("a", "", List(missing)) => }
+      "b" ~> { case ("b", "", List(unexpected)) => }
+      "xxxxxb" ~> { case ("", "xxxxxb", List(unexpected2, unexpected)) => }
+      "xaxxxb" ~> { case ("a", "xxxb", unexpected :: unexpected2 :: Nil) => }
+      "xxaxxxb" ~> { case ("", "xxaxxxb", unexpected :: unexpected2 :: Nil) => }
     }
   }
 
   test("a|b") {
     new Check(_AorB) {
-      "a" ~> { case (Seq('a'), Seq(), Nil) => }
-      "b" ~> { case (Seq('b'), Seq(), Nil) => }
-      "bbc" ~> { case (Seq('b'), Seq('b', 'c'), Nil) => }
-      "x" ~> { case (Seq(), Seq('x'), Seq(unexpected)) => }
+      "a" ~> { case ("a", "", Nil) => }
+      "b" ~> { case ("b", "", Nil) => }
+      "bbc" ~> { case ("b", "bc", Nil) => }
+      "x" ~> { case ("", "x", Seq(unexpected)) => }
     }
   }
 
